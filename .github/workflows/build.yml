@@ -1,0 +1,35 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-windows:
+    name: Build Windows executable
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Check Rust version
+        run: rustc --version
+
+      - name: Build release executable
+        run: cargo build --release --locked
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: EdgeShortcutTool-Windows
+          path: target/release/EdgeShortcutTool.exe
