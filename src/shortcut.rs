@@ -11,12 +11,22 @@ use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 
 const ARGUMENT_BUFFER_LEN: usize = 32_768;
 const EDGE_SHORTCUT_NAME: &str = "Microsoft Edge.lnk";
+const MANAGED_FEATURE_SWITCH_NAMES: [&str; 2] = ["--enable-features", "--disable-features"];
+const PRESERVED_SHORTCUT_SWITCH_NAMES: [&str; 5] = [
+    "--profile-directory",
+    "--profile-email",
+    "--app-id",
+    "--app",
+    "--user-data-dir",
+];
 
 pub struct ComApartment;
 
 impl ComApartment {
     pub fn init() -> WinResult<Self> {
         // ShellLink uses COM, so initialize it once on the UI thread.
+        // SAFETY: A successful CoInitializeEx call is balanced by ComApartment::drop
+        // on the same UI thread before the app exits.
         unsafe {
             CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         }
@@ -27,6 +37,8 @@ impl ComApartment {
 
 impl Drop for ComApartment {
     fn drop(&mut self) {
+        // SAFETY: ComApartment is only constructed after CoInitializeEx succeeds,
+        // so this balances that initialization on the same thread.
         unsafe {
             CoUninitialize();
         }
@@ -108,26 +120,18 @@ pub fn get_shortcut_paths() -> Vec<PathBuf> {
     }
 
     if let Some(program_data) = env::var_os("ProgramData") {
-        paths.push(
-            PathBuf::from(program_data)
-                .join(r"Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk"),
-        );
+        let program_data = PathBuf::from(program_data);
+
+        paths.push(program_data.join(r"Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk"));
     }
 
     if let Some(app_data) = env::var_os("AppData") {
         let app_data = PathBuf::from(app_data);
 
         paths.push(app_data.join(r"Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk"));
-
         paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\Microsoft Edge.lnk"));
-
-        paths.push(app_data.join(
-            r"Microsoft\Internet Explorer\Quick Launch\User Pinned\StartMenu\Microsoft Edge.lnk",
-        ));
-
-        paths.push(app_data.join(
-            r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Microsoft Edge.lnk",
-        ));
+        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\StartMenu\Microsoft Edge.lnk"));
+        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Microsoft Edge.lnk"));
 
         add_implicit_edge_shortcuts(&mut paths, &app_data);
     }
@@ -139,9 +143,7 @@ pub fn get_shortcut_paths() -> Vec<PathBuf> {
 
 fn add_implicit_edge_shortcuts(paths: &mut Vec<PathBuf>, app_data: &Path) {
     // Some pinned shortcuts live inside hashed ImplicitAppShortcuts folders.
-    let root = app_data.join(
-        r"Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts",
-    );
+    let root = app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts");
 
     let Ok(hash_dirs) = fs::read_dir(root) else {
         return;
@@ -179,7 +181,7 @@ fn is_edge_shortcut_file(path: &Path) -> bool {
 fn strip_optional_feature_switch(text: &str) -> &str {
     let trimmed = text.trim();
 
-    for switch_name in ["--enable-features", "--disable-features"] {
+    for switch_name in MANAGED_FEATURE_SWITCH_NAMES {
         let Some(head) = trimmed.get(..switch_name.len()) else {
             continue;
         };
@@ -226,11 +228,27 @@ pub fn normalize_feature_list(text: &str) -> String {
         .join(",")
 }
 
-pub fn get_custom_options_from_text(enable_text: &str, disable_text: &str) -> String {
+pub fn normalize_standalone_options(text: &str) -> String {
+    // Standalone switches are entered as normal command-line switches, for example:
+    // --force-dark-mode --disable-extensions --mute-audio
+    split_argument_tokens(text)
+        .into_iter()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub fn get_custom_options_from_text(standalone_text: &str, enable_text: &str, disable_text: &str) -> String {
+    let standalone_options = normalize_standalone_options(standalone_text);
     let enable_features = normalize_feature_list(enable_text);
     let disable_features = normalize_feature_list(disable_text);
 
     let mut parts = Vec::new();
+
+    if !standalone_options.is_empty() {
+        parts.push(standalone_options);
+    }
 
     if !enable_features.is_empty() {
         parts.push(format!("--enable-features=\"{}\"", enable_features));
@@ -241,6 +259,42 @@ pub fn get_custom_options_from_text(enable_text: &str, disable_text: &str) -> St
     }
 
     parts.join(" ")
+}
+
+pub fn get_standalone_options_from_arguments(arguments: &str) -> String {
+    // Prefill Custom Standalone from existing non-feature switches while leaving common
+    // shortcut-owned switches, such as profile and app launch arguments, hidden.
+    let tokens = split_argument_tokens(arguments);
+    let mut items = Vec::new();
+    let mut index = 0usize;
+
+    while index < tokens.len() {
+        let token = &tokens[index];
+
+        if is_managed_feature_switch_with_inline_value(token) {
+            index += 1;
+            continue;
+        }
+
+        if is_exact_managed_feature_switch(token) {
+            index = skip_separated_switch_value(&tokens, index);
+            continue;
+        }
+
+        if is_preserved_shortcut_switch(token) {
+            index = skip_preserved_shortcut_switch(&tokens, index);
+            continue;
+        }
+
+        if is_switch_token(token) {
+            index = push_standalone_switch(&tokens, index, &mut items);
+            continue;
+        }
+
+        index += 1;
+    }
+
+    items.join(" ")
 }
 
 pub fn get_feature_list_from_arguments(arguments: &str, switch_name: &str) -> String {
@@ -296,9 +350,7 @@ fn get_separated_switch_value(tokens: &[String], switch_index: usize) -> Option<
     let next = tokens.get(next_index)?;
 
     if next == "=" {
-        return tokens
-            .get(next_index + 1)
-            .map(|value| (value.as_str(), next_index + 2));
+        return tokens.get(next_index + 1).map(|value| (value.as_str(), next_index + 2));
     }
 
     if let Some(value) = next.strip_prefix('=') {
@@ -313,8 +365,9 @@ fn get_separated_switch_value(tokens: &[String], switch_index: usize) -> Option<
 }
 
 pub fn merge_shortcut_arguments(existing_arguments: &str, managed_options: &str) -> String {
-    // Replace only the Edge feature switches managed by this tool.
-    let preserved = strip_managed_feature_switches(existing_arguments);
+    // Replace the switches managed by this tool while preserving common shortcut-owned
+    // arguments such as profile and app launch arguments.
+    let preserved = strip_managed_custom_switches(existing_arguments);
     let managed_options = managed_options.trim();
 
     match (preserved.is_empty(), managed_options.is_empty()) {
@@ -325,7 +378,7 @@ pub fn merge_shortcut_arguments(existing_arguments: &str, managed_options: &str)
     }
 }
 
-fn strip_managed_feature_switches(arguments: &str) -> String {
+fn strip_managed_custom_switches(arguments: &str) -> String {
     let tokens = split_argument_tokens(arguments);
     let mut kept = Vec::new();
     let mut index = 0usize;
@@ -339,6 +392,16 @@ fn strip_managed_feature_switches(arguments: &str) -> String {
         }
 
         if is_exact_managed_feature_switch(token) {
+            index = skip_separated_switch_value(&tokens, index);
+            continue;
+        }
+
+        if is_preserved_shortcut_switch(token) {
+            index = keep_preserved_shortcut_switch(&tokens, index, &mut kept);
+            continue;
+        }
+
+        if is_switch_token(token) {
             index = skip_separated_switch_value(&tokens, index);
             continue;
         }
@@ -371,8 +434,82 @@ fn skip_separated_switch_value(tokens: &[String], switch_index: usize) -> usize 
     next_index
 }
 
+fn keep_preserved_shortcut_switch(tokens: &[String], switch_index: usize, kept: &mut Vec<String>) -> usize {
+    let token = &tokens[switch_index];
+    kept.push(token.clone());
+
+    if !is_exact_preserved_shortcut_switch(token) {
+        return switch_index + 1;
+    }
+
+    let next_index = switch_index + 1;
+    let Some(next) = tokens.get(next_index) else {
+        return next_index;
+    };
+
+    if next == "=" {
+        kept.push(next.clone());
+
+        if let Some(value) = tokens.get(next_index + 1) {
+            kept.push(value.clone());
+            return next_index + 2;
+        }
+
+        return next_index + 1;
+    }
+
+    if next.starts_with('=') || !next.starts_with("--") {
+        kept.push(next.clone());
+        return next_index + 1;
+    }
+
+    next_index
+}
+
+fn skip_preserved_shortcut_switch(tokens: &[String], switch_index: usize) -> usize {
+    let token = &tokens[switch_index];
+
+    if !is_exact_preserved_shortcut_switch(token) {
+        return switch_index + 1;
+    }
+
+    skip_separated_switch_value(tokens, switch_index)
+}
+
+fn push_standalone_switch(tokens: &[String], switch_index: usize, items: &mut Vec<String>) -> usize {
+    let token = &tokens[switch_index];
+    items.push(token.clone());
+
+    let next_index = switch_index + 1;
+    let Some(next) = tokens.get(next_index) else {
+        return next_index;
+    };
+
+    if next == "=" {
+        items.push(next.clone());
+
+        if let Some(value) = tokens.get(next_index + 1) {
+            items.push(value.clone());
+            return next_index + 2;
+        }
+
+        return next_index + 1;
+    }
+
+    if next.starts_with('=') || !next.starts_with("--") {
+        items.push(next.clone());
+        return next_index + 1;
+    }
+
+    next_index
+}
+
+fn is_switch_token(token: &str) -> bool {
+    token.starts_with("--")
+}
+
 fn is_managed_feature_switch_with_inline_value(token: &str) -> bool {
-    for switch_name in ["--enable-features", "--disable-features"] {
+    for switch_name in MANAGED_FEATURE_SWITCH_NAMES {
         let lower = token.to_ascii_lowercase();
 
         if !lower.starts_with(switch_name) {
@@ -392,7 +529,37 @@ fn is_managed_feature_switch_with_inline_value(token: &str) -> bool {
 }
 
 fn is_exact_managed_feature_switch(token: &str) -> bool {
-    ["--enable-features", "--disable-features"]
+    MANAGED_FEATURE_SWITCH_NAMES
+        .iter()
+        .any(|switch_name| token.eq_ignore_ascii_case(switch_name))
+}
+
+fn is_preserved_shortcut_switch(token: &str) -> bool {
+    if is_exact_preserved_shortcut_switch(token) {
+        return true;
+    }
+
+    let lower = token.to_ascii_lowercase();
+
+    for switch_name in PRESERVED_SHORTCUT_SWITCH_NAMES {
+        if !lower.starts_with(switch_name) {
+            continue;
+        }
+
+        let Some(rest) = lower.get(switch_name.len()..) else {
+            continue;
+        };
+
+        if rest.starts_with('=') {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_exact_preserved_shortcut_switch(token: &str) -> bool {
+    PRESERVED_SHORTCUT_SWITCH_NAMES
         .iter()
         .any(|switch_name| token.eq_ignore_ascii_case(switch_name))
 }
@@ -443,9 +610,10 @@ fn read_shortcut_arguments(path: &Path) -> Option<String> {
         return None;
     }
 
+    // SAFETY: COM is initialized before this function is called. The COM wrappers
+    // own their interface lifetimes, and the stack buffer lives for GetArguments.
     unsafe {
-        let shell_link: IShellLinkW =
-            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
 
         let persist_file: IPersistFile = shell_link.cast().ok()?;
         let path_string = path.to_string_lossy().to_string();
@@ -484,6 +652,8 @@ pub fn get_current_shortcut_arguments() -> String {
 
 fn update_shortcut_arguments(path: &Path, managed_options: &str) -> WinResult<()> {
     // Load the existing shortcut and change only its argument string.
+    // SAFETY: COM is initialized before this function is called. The HSTRING
+    // values and stack buffer remain alive for each synchronous COM call.
     unsafe {
         let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         let persist_file: IPersistFile = shell_link.cast()?;
@@ -552,72 +722,109 @@ pub fn apply_options(options: &str) -> ApplyResult {
 mod tests {
     use super::*;
 
+    const STANDALONE_EXAMPLE: &str = "--force-dark-mode --disable-extensions --mute-audio";
+    const ENABLE_EXAMPLE: &str = "msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading";
+    const DISABLE_EXAMPLE: &str = "msShowSignInIndicator,msUndersideButton,MediaRouter";
+
     #[test]
     fn normalizes_plain_feature_list() {
-        assert_eq!(
-            normalize_feature_list(" FeatureA, FeatureB ,, FeatureC "),
-            "FeatureA,FeatureB,FeatureC"
-        );
+        let input = " msForceNoRoundedCornerAndMargin, msDownloadsHub ,, ParallelDownloading ";
+
+        assert_eq!(normalize_feature_list(input), ENABLE_EXAMPLE);
     }
 
     #[test]
     fn normalizes_full_enable_switch() {
-        assert_eq!(
-            normalize_feature_list(r#"--enable-features="FeatureA, FeatureB""#),
-            "FeatureA,FeatureB"
-        );
+        let input = r#"--enable-features="msForceNoRoundedCornerAndMargin, msDownloadsHub""#;
+
+        assert_eq!(normalize_feature_list(input), "msForceNoRoundedCornerAndMargin,msDownloadsHub");
     }
 
     #[test]
     fn builds_custom_options() {
-        assert_eq!(
-            get_custom_options_from_text("FeatureA, FeatureB", r#"--disable-features="FeatureC""#),
-            r#"--enable-features="FeatureA,FeatureB" --disable-features="FeatureC""#
+        let options = get_custom_options_from_text(
+            STANDALONE_EXAMPLE,
+            "msForceNoRoundedCornerAndMargin, msDownloadsHub, ParallelDownloading",
+            r#"--disable-features="msShowSignInIndicator,msUndersideButton,MediaRouter""#,
         );
+
+        let expected = format!(
+            r#"{} --enable-features="{}" --disable-features="{}""#,
+            STANDALONE_EXAMPLE, ENABLE_EXAMPLE, DISABLE_EXAMPLE
+        );
+
+        assert_eq!(options, expected);
     }
 
     #[test]
     fn extracts_enable_features_from_arguments() {
-        let args = r#"--profile-directory="Profile 1" --enable-features="A,B" --disable-features="C""#;
+        let args = format!(
+            r#"--profile-directory="Profile 1" --enable-features="{}" --disable-features="msShowSignInIndicator""#,
+            "msForceNoRoundedCornerAndMargin,msDownloadsHub"
+        );
 
-        assert_eq!(get_feature_list_from_arguments(args, "enable-features"), "A,B");
+        assert_eq!(
+            get_feature_list_from_arguments(&args, "enable-features"),
+            "msForceNoRoundedCornerAndMargin,msDownloadsHub"
+        );
     }
 
     #[test]
     fn extracts_multiple_same_switches() {
-        let args = r#"--enable-features=A --enable-features="B,C""#;
+        let args = concat!(
+            r#"--enable-features=msForceNoRoundedCornerAndMargin "#,
+            r#"--enable-features="msDownloadsHub,ParallelDownloading""#
+        );
 
-        assert_eq!(get_feature_list_from_arguments(args, "enable-features"), "A,B,C");
+        assert_eq!(get_feature_list_from_arguments(args, "enable-features"), ENABLE_EXAMPLE);
     }
 
     #[test]
     fn merges_arguments_without_dropping_unrelated_arguments() {
-        let existing = r#"--profile-directory="Profile 1" --enable-features="Old" --app-id=abc"#;
-        let managed = r#"--disable-features="New""#;
+        let existing = concat!(
+            r#"--profile-directory="Profile 1" --enable-features="msDownloadsHub" "#,
+            r#"--disable-extensions --app-id=abc"#
+        );
+        let managed = r#"--mute-audio --disable-features="MediaRouter""#;
 
         assert_eq!(
             merge_shortcut_arguments(existing, managed),
-            r#"--profile-directory="Profile 1" --app-id=abc --disable-features="New""#
+            r#"--profile-directory="Profile 1" --app-id=abc --mute-audio --disable-features="MediaRouter""#
         );
     }
 
     #[test]
-    fn restore_default_removes_feature_switches_but_keeps_other_arguments() {
-        let existing = r#"--profile-directory="Default" --disable-features="A,B" --flag"#;
+    fn restore_default_removes_custom_switches_but_keeps_shortcut_arguments() {
+        let existing = concat!(
+            r#"--profile-directory="Default" "#,
+            r#"--disable-features="msShowSignInIndicator,MediaRouter" "#,
+            r#"--disable-extensions --app-id=abc"#
+        );
 
         assert_eq!(
             merge_shortcut_arguments(existing, ""),
-            r#"--profile-directory="Default" --flag"#
+            r#"--profile-directory="Default" --app-id=abc"#
         );
+    }
+
+    #[test]
+    fn extracts_standalone_options_from_arguments() {
+        let args = concat!(
+            r#"--profile-directory="Default" --force-dark-mode "#,
+            r#"--enable-features="msForceNoRoundedCornerAndMargin" "#,
+            r#"--disable-extensions --mute-audio"#
+        );
+
+        assert_eq!(get_standalone_options_from_arguments(args), STANDALONE_EXAMPLE);
     }
 
     #[test]
     fn non_ascii_arguments_do_not_break_tokenization() {
-        let existing = r#"--profile-directory="Profilé 1" --enable-features="A""#;
+        let existing = r#"--profile-directory="Profilé 1" --enable-features="msDownloadsHub""#;
 
         assert_eq!(
-            merge_shortcut_arguments(existing, r#"--disable-features="B""#),
-            r#"--profile-directory="Profilé 1" --disable-features="B""#
+            merge_shortcut_arguments(existing, r#"--disable-features="MediaRouter""#),
+            r#"--profile-directory="Profilé 1" --disable-features="MediaRouter""#
         );
     }
 }

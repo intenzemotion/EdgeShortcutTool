@@ -22,6 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 const APP_TITLE: &str = "Edge Shortcut Tool";
+const CUSTOM_WINDOW_CENTER_Y_OFFSET: i32 = -28;
 
 const OLD_FEATURE: &str = "msFeatureGroupNewLookAndFeelHoldout";
 const NEW_FEATURE: &str = "msForceNoRoundedCornerAndMargin";
@@ -44,7 +45,7 @@ const HELP_TEXT: &str = concat!(
     "This is the newer/more direct method for removing rounded corners and margins.\r\n",
     "\r\n",
     "Restore default\r\n",
-    "Removes existing Edge enable/disable feature flags from supported shortcuts.\r\n",
+    "Removes existing Edge custom shortcut flags managed by this tool.\r\n",
     "Other shortcut arguments, such as profile arguments, are preserved.\r\n",
     "\r\n",
     "Hide sign-in red dot\r\n",
@@ -52,8 +53,10 @@ const HELP_TEXT: &str = concat!(
     "This hides the red sign-in reminder dot on Edge profile icon.\r\n",
     "\r\n",
     "Custom\r\n",
-    "Enter feature names separated by commas in the enable/disable fields.\r\n",
-    "Applying custom flags replaces existing enable/disable feature flags.\r\n",
+    "Standalone example: --force-dark-mode --disable-extensions --mute-audio.\r\n",
+    "Enable example: msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading.\r\n",
+    "Disable example: msShowSignInIndicator,msUndersideButton,MediaRouter.\r\n",
+    "Applying custom flags replaces existing managed custom flags.\r\n",
     "\r\n",
     "Info\r\n",
     "Displays executable candidates and supported shortcut locations.\r\n",
@@ -89,6 +92,8 @@ struct App {
     button_exit: nwg::Button,
 
     custom_window: nwg::Window,
+    label_standalone_flags: nwg::Label,
+    text_standalone_flags: nwg::TextInput,
     label_enable_features: nwg::Label,
     text_enable_features: nwg::TextInput,
     label_disable_features: nwg::Label,
@@ -155,41 +160,92 @@ impl App {
     }
 
     fn build_main_window(&mut self) -> Result<(), nwg::NwgError> {
+        const WINDOW_W: i32 = 312;
+
+        const MARGIN: i32 = 14;
+        const TOP_BUTTON_Y: i32 = 12;
+        const TOP_BUTTON_W: i32 = 27;
+        const TOP_BUTTON_H: i32 = 25;
+        const TOP_BUTTON_GAP: i32 = 5;
+        const RIGHT_EDGE: i32 = WINDOW_W - MARGIN;
+        const HELP_X: i32 = RIGHT_EDGE - TOP_BUTTON_W;
+        const CUSTOM_X: i32 = HELP_X - TOP_BUTTON_GAP - TOP_BUTTON_W;
+
+        const PRESET_X: i32 = MARGIN;
+        const PRESET_Y: i32 = 42;
+        const PRESET_W: i32 = WINDOW_W - (MARGIN * 2);
+        const PRESET_H: i32 = 140;
+        const PRESET_RIGHT_X: i32 = PRESET_X + PRESET_W;
+        const PRESET_BOTTOM_Y: i32 = PRESET_Y + PRESET_H - 1;
+
+        const TITLE_X: i32 = 24;
+        const TITLE_Y: i32 = 36;
+        const TITLE_W: i32 = 104;
+        const TITLE_H: i32 = 20;
+        const TITLE_RIGHT_X: i32 = TITLE_X + TITLE_W;
+        const PRESET_LINE_TOP_LEFT_W: i32 = TITLE_X - PRESET_X - 1;
+        const PRESET_LINE_TOP_RIGHT_W: i32 = PRESET_RIGHT_X - TITLE_RIGHT_X;
+
+        const PRESET_BUTTON_X: i32 = 16;
+        const PRESET_BUTTON_Y: i32 = 19;
+        const PRESET_BUTTON_W: i32 = PRESET_W - (PRESET_BUTTON_X * 2);
+        const PRESET_BUTTON_H: i32 = 30;
+        const PRESET_BUTTON_GAP: i32 = 6;
+        const OLD_BUTTON_Y: i32 = PRESET_BUTTON_Y;
+        const NEW_BUTTON_Y: i32 = OLD_BUTTON_Y + PRESET_BUTTON_H + PRESET_BUTTON_GAP;
+        const DEFAULT_BUTTON_Y: i32 = NEW_BUTTON_Y + PRESET_BUTTON_H + PRESET_BUTTON_GAP;
+
+        const CHECK_X: i32 = 16;
+        const CHECK_Y: i32 = PRESET_Y + PRESET_H + 8;
+        const CHECK_W: i32 = 250;
+        const CHECK_H: i32 = 22;
+
+        const ACTION_Y: i32 = 224;
+        const ACTION_H: i32 = 26;
+        const ACTION_GAP: i32 = 5;
+        const EXIT_W: i32 = 73;
+        const INFO_W: i32 = 27;
+        const EXIT_X: i32 = RIGHT_EDGE - EXIT_W;
+        const INFO_X: i32 = EXIT_X - ACTION_GAP - INFO_W;
+        const STATUS_X: i32 = MARGIN;
+        const STATUS_W: i32 = INFO_X - ACTION_GAP - STATUS_X;
+        const WINDOW_H: i32 = ACTION_Y + ACTION_H + MARGIN;
+
         nwg::Window::builder()
             .flags(nwg::WindowFlags::WINDOW)
-            .size((312, 263))
+            .size((WINDOW_W, WINDOW_H))
             .position((400, 300))
             .title(APP_TITLE)
             .build(&mut self.window)?;
 
         nwg::Button::builder()
             .text("...")
-            .position((239, 12))
-            .size((27, 25))
-            .font(Some(&self.info_font))
+            .position((CUSTOM_X, TOP_BUTTON_Y))
+            .size((TOP_BUTTON_W, TOP_BUTTON_H))
+            .font(Some(&self.ui_font))
             .parent(&self.window)
             .build(&mut self.button_custom)?;
 
         nwg::Button::builder()
             .text("?")
-            .position((271, 12))
-            .size((27, 25))
-            .font(Some(&self.info_font))
+            .position((HELP_X, TOP_BUTTON_Y))
+            .size((TOP_BUTTON_W, TOP_BUTTON_H))
+            .font(Some(&self.ui_font))
             .parent(&self.window)
             .build(&mut self.button_help)?;
 
         // Draw the preset border manually so the group line stays soft and consistent.
         nwg::Frame::builder()
             .flags(nwg::FrameFlags::VISIBLE)
-            .position((14, 42))
-            .size((284, 140))
+            .position((PRESET_X, PRESET_Y))
+            .size((PRESET_W, PRESET_H))
             .parent(&self.window)
             .build(&mut self.preset_panel)?;
 
         nwg::RichLabel::builder()
             .text("")
-            .position((14, 42))
-            .size((9, 1))
+            .position((PRESET_X, PRESET_Y))
+            .size((PRESET_LINE_TOP_LEFT_W, 1))
             .background_color(Some(COLOR_GROUP_LINE))
             .flags(nwg::RichLabelFlags::VISIBLE)
             .parent(&self.window)
@@ -197,8 +253,8 @@ impl App {
 
         nwg::RichLabel::builder()
             .text("")
-            .position((128, 42))
-            .size((170, 1))
+            .position((TITLE_RIGHT_X, PRESET_Y))
+            .size((PRESET_LINE_TOP_RIGHT_W, 1))
             .background_color(Some(COLOR_GROUP_LINE))
             .flags(nwg::RichLabelFlags::VISIBLE)
             .parent(&self.window)
@@ -206,8 +262,8 @@ impl App {
 
         nwg::RichLabel::builder()
             .text("")
-            .position((14, 42))
-            .size((1, 140))
+            .position((PRESET_X, PRESET_Y))
+            .size((1, PRESET_H))
             .background_color(Some(COLOR_GROUP_LINE))
             .flags(nwg::RichLabelFlags::VISIBLE)
             .parent(&self.window)
@@ -215,8 +271,8 @@ impl App {
 
         nwg::RichLabel::builder()
             .text("")
-            .position((297, 42))
-            .size((1, 140))
+            .position((PRESET_RIGHT_X - 1, PRESET_Y))
+            .size((1, PRESET_H))
             .background_color(Some(COLOR_GROUP_LINE))
             .flags(nwg::RichLabelFlags::VISIBLE)
             .parent(&self.window)
@@ -224,8 +280,8 @@ impl App {
 
         nwg::RichLabel::builder()
             .text("")
-            .position((14, 181))
-            .size((284, 1))
+            .position((PRESET_X, PRESET_BOTTOM_Y))
+            .size((PRESET_W, 1))
             .background_color(Some(COLOR_GROUP_LINE))
             .flags(nwg::RichLabelFlags::VISIBLE)
             .parent(&self.window)
@@ -233,8 +289,8 @@ impl App {
 
         nwg::RichLabel::builder()
             .text("Fix rounded corners")
-            .position((24, 36))
-            .size((104, 20))
+            .position((TITLE_X, TITLE_Y))
+            .size((TITLE_W, TITLE_H))
             .font(Some(&self.ui_font))
             .background_color(Some(COLOR_CONTROL))
             .flags(nwg::RichLabelFlags::VISIBLE)
@@ -243,39 +299,38 @@ impl App {
 
         nwg::Button::builder()
             .text("Old workaround")
-            .position((16, 19))
-            .size((252, 30))
+            .position((PRESET_BUTTON_X, OLD_BUTTON_Y))
+            .size((PRESET_BUTTON_W, PRESET_BUTTON_H))
             .parent(&self.preset_panel)
             .build(&mut self.button_old)?;
 
         nwg::Button::builder()
             .text("New workaround")
-            .position((16, 55))
-            .size((252, 30))
+            .position((PRESET_BUTTON_X, NEW_BUTTON_Y))
+            .size((PRESET_BUTTON_W, PRESET_BUTTON_H))
             .parent(&self.preset_panel)
             .build(&mut self.button_new)?;
 
         nwg::Button::builder()
             .text("Restore default")
-            .position((16, 91))
-            .size((252, 30))
+            .position((PRESET_BUTTON_X, DEFAULT_BUTTON_Y))
+            .size((PRESET_BUTTON_W, PRESET_BUTTON_H))
             .parent(&self.preset_panel)
             .build(&mut self.button_default)?;
 
         nwg::CheckBox::builder()
             .text("Hide sign-in red dot")
-            .position((16, 190))
-            .size((250, 22))
+            .position((CHECK_X, CHECK_Y))
+            .size((CHECK_W, CHECK_H))
             .parent(&self.window)
             .build(&mut self.check_sign_in_indicator)?;
 
-        self.check_sign_in_indicator
-            .set_check_state(nwg::CheckBoxState::Checked);
+        self.check_sign_in_indicator.set_check_state(nwg::CheckBoxState::Checked);
 
         // RichTextBox gives the status field the same sunken Win32 look as the dialogs.
         nwg::RichTextBox::builder()
-            .position((14, 225))
-            .size((174, 24))
+            .position((STATUS_X, ACTION_Y))
+            .size((STATUS_W, ACTION_H))
             .font(Some(&self.ui_font))
             .readonly(false)
             .flags(nwg::RichTextBoxFlags::VISIBLE | nwg::RichTextBoxFlags::SAVE_SELECTION)
@@ -288,16 +343,16 @@ impl App {
 
         nwg::Button::builder()
             .text("i")
-            .position((193, 224))
-            .size((27, 25))
-            .font(Some(&self.info_font))
+            .position((INFO_X, ACTION_Y))
+            .size((INFO_W, ACTION_H))
+            .font(Some(&self.ui_font))
             .parent(&self.window)
             .build(&mut self.button_info)?;
 
         nwg::Button::builder()
             .text("Exit")
-            .position((225, 224))
-            .size((73, 26))
+            .position((EXIT_X, ACTION_Y))
+            .size((EXIT_W, ACTION_H))
             .parent(&self.window)
             .build(&mut self.button_exit)?;
 
@@ -306,20 +361,33 @@ impl App {
 
     fn build_custom_window(&mut self) -> Result<(), nwg::NwgError> {
         const WINDOW_W: i32 = 470;
-        const WINDOW_H: i32 = 160;
 
         const MARGIN_X: i32 = 16;
         const LABEL_W: i32 = WINDOW_W - (MARGIN_X * 2);
+        const LABEL_H: i32 = 18;
         const TEXT_W: i32 = LABEL_W;
         const TEXT_H: i32 = 24;
+
+        const TOP_MARGIN: i32 = 18;
+        const LABEL_TEXT_GAP: i32 = 1;
+        const FIELD_GAP: i32 = 6;
+        const ACTION_GAP: i32 = 14;
+        const BOTTOM_MARGIN: i32 = 14;
+
+        const STANDALONE_LABEL_Y: i32 = TOP_MARGIN;
+        const STANDALONE_TEXT_Y: i32 = STANDALONE_LABEL_Y + LABEL_H + LABEL_TEXT_GAP;
+        const ENABLE_LABEL_Y: i32 = STANDALONE_TEXT_Y + TEXT_H + FIELD_GAP;
+        const ENABLE_TEXT_Y: i32 = ENABLE_LABEL_Y + LABEL_H + LABEL_TEXT_GAP;
+        const DISABLE_LABEL_Y: i32 = ENABLE_TEXT_Y + TEXT_H + FIELD_GAP;
+        const DISABLE_TEXT_Y: i32 = DISABLE_LABEL_Y + LABEL_H + LABEL_TEXT_GAP;
 
         const BUTTON_W: i32 = 75;
         const BUTTON_H: i32 = 26;
         const BUTTON_GAP: i32 = 8;
-        const BOTTOM_MARGIN: i32 = 11;
-        const BUTTON_Y: i32 = WINDOW_H - BOTTOM_MARGIN - BUTTON_H;
+        const BUTTON_Y: i32 = DISABLE_TEXT_Y + TEXT_H + ACTION_GAP;
         const BUTTON_CLOSE_X: i32 = WINDOW_W - MARGIN_X - BUTTON_W;
         const BUTTON_APPLY_X: i32 = BUTTON_CLOSE_X - BUTTON_GAP - BUTTON_W;
+        const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BOTTOM_MARGIN;
 
         nwg::Window::builder()
             .flags(nwg::WindowFlags::WINDOW)
@@ -329,27 +397,40 @@ impl App {
             .build(&mut self.custom_window)?;
 
         nwg::Label::builder()
+            .text("Standalone")
+            .position((MARGIN_X, STANDALONE_LABEL_Y))
+            .size((LABEL_W, LABEL_H))
+            .parent(&self.custom_window)
+            .build(&mut self.label_standalone_flags)?;
+
+        nwg::TextInput::builder()
+            .position((MARGIN_X, STANDALONE_TEXT_Y))
+            .size((TEXT_W, TEXT_H))
+            .parent(&self.custom_window)
+            .build(&mut self.text_standalone_flags)?;
+
+        nwg::Label::builder()
             .text("Enable features:")
-            .position((MARGIN_X, 18))
-            .size((LABEL_W, 18))
+            .position((MARGIN_X, ENABLE_LABEL_Y))
+            .size((LABEL_W, LABEL_H))
             .parent(&self.custom_window)
             .build(&mut self.label_enable_features)?;
 
         nwg::TextInput::builder()
-            .position((MARGIN_X, 37))
+            .position((MARGIN_X, ENABLE_TEXT_Y))
             .size((TEXT_W, TEXT_H))
             .parent(&self.custom_window)
             .build(&mut self.text_enable_features)?;
 
         nwg::Label::builder()
             .text("Disable features:")
-            .position((MARGIN_X, 67))
-            .size((LABEL_W, 18))
+            .position((MARGIN_X, DISABLE_LABEL_Y))
+            .size((LABEL_W, LABEL_H))
             .parent(&self.custom_window)
             .build(&mut self.label_disable_features)?;
 
         nwg::TextInput::builder()
-            .position((MARGIN_X, 86))
+            .position((MARGIN_X, DISABLE_TEXT_Y))
             .size((TEXT_W, TEXT_H))
             .parent(&self.custom_window)
             .build(&mut self.text_disable_features)?;
@@ -374,19 +455,20 @@ impl App {
     }
 
     fn build_help_window(&mut self) -> Result<(), nwg::NwgError> {
-        const WINDOW_W: i32 = 480;
-        const WINDOW_H: i32 = 485;
+        const WINDOW_W: i32 = 600;
 
-        const TEXT_X: i32 = 14;
-        const TEXT_Y: i32 = 14;
-        const TEXT_W: i32 = WINDOW_W - (TEXT_X * 2);
-        const TEXT_H: i32 = 426;
-
+        const MARGIN: i32 = 14;
+        const BUTTON_SECTION_GAP: i32 = 14;
         const BUTTON_W: i32 = 75;
         const BUTTON_H: i32 = 26;
-        const BUTTON_GAP_Y: i32 = 8;
+
+        const TEXT_X: i32 = MARGIN;
+        const TEXT_Y: i32 = MARGIN;
+        const TEXT_W: i32 = WINDOW_W - (MARGIN * 2);
+        const TEXT_H: i32 = 468;
         const BUTTON_X: i32 = TEXT_X + TEXT_W - BUTTON_W;
-        const BUTTON_Y: i32 = TEXT_Y + TEXT_H + BUTTON_GAP_Y;
+        const BUTTON_Y: i32 = TEXT_Y + TEXT_H + BUTTON_SECTION_GAP;
+        const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;
 
         nwg::Window::builder()
             .flags(nwg::WindowFlags::WINDOW)
@@ -422,9 +504,8 @@ impl App {
         const WINDOW_W: i32 = 750;
 
         const MARGIN: i32 = 16;
-        const GAP: i32 = 8;
+        const BUTTON_SECTION_GAP: i32 = 14;
         const SECTION_GAP: i32 = 16;
-        const BOTTOM_MARGIN: i32 = 11;
         const HEADER_H: i32 = 20;
         const HEADER_LINE_HEIGHT: i32 = 18;
         const HEADER_TEXT_GAP: i32 = 4;
@@ -441,8 +522,8 @@ impl App {
         const BUTTON_W: i32 = 75;
         const BUTTON_H: i32 = 26;
         const BUTTON_X: i32 = MARGIN + CONTENT_W - BUTTON_W;
-        const BUTTON_Y: i32 = SHORTCUT_TEXT_Y + SHORTCUT_TEXT_H + GAP;
-        const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BOTTOM_MARGIN;
+        const BUTTON_Y: i32 = SHORTCUT_TEXT_Y + SHORTCUT_TEXT_H + BUTTON_SECTION_GAP;
+        const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;
 
         // Keep diagnostic sections scrollable when future output becomes longer.
         let info_text_flags = nwg::RichTextBoxFlags::VISIBLE
@@ -522,29 +603,24 @@ impl App {
     }
 
     fn build_tooltips(&mut self) -> Result<(), nwg::NwgError> {
-        let custom_text = "Enter comma-separated names. Example: FeatureA,FeatureB,FeatureC";
+        let standalone_text = "Example: --force-dark-mode --disable-extensions --mute-audio";
+        let enable_text = "Example: msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading";
+        let disable_text = "Example: msShowSignInIndicator,msUndersideButton,MediaRouter";
 
         nwg::Tooltip::builder()
             .register(&self.button_custom, "Custom")
             .register(&self.button_help, "Help")
             .register(&self.button_info, "Info")
-            .register(
-                &self.button_old,
-                "--disable-features=msFeatureGroupNewLookAndFeelHoldout",
-            )
-            .register(
-                &self.button_new,
-                "--enable-features=msForceNoRoundedCornerAndMargin",
-            )
+            .register(&self.button_old, "--disable-features=msFeatureGroupNewLookAndFeelHoldout")
+            .register(&self.button_new, "--enable-features=msForceNoRoundedCornerAndMargin")
             .register(&self.button_default, "Restore normal Edge shortcut settings")
-            .register(
-                &self.check_sign_in_indicator,
-                "--disable-features=msShowSignInIndicator",
-            )
-            .register(&self.label_enable_features, custom_text)
-            .register(&self.text_enable_features, custom_text)
-            .register(&self.label_disable_features, custom_text)
-            .register(&self.text_disable_features, custom_text)
+            .register(&self.check_sign_in_indicator, "--disable-features=msShowSignInIndicator")
+            .register(&self.label_standalone_flags, standalone_text)
+            .register(&self.text_standalone_flags, standalone_text)
+            .register(&self.label_enable_features, enable_text)
+            .register(&self.text_enable_features, enable_text)
+            .register(&self.label_disable_features, disable_text)
+            .register(&self.text_disable_features, disable_text)
             .build(&mut self.tooltip)?;
 
         Ok(())
@@ -608,10 +684,7 @@ impl App {
 
     fn get_new_options(&self) -> String {
         if self.hide_sign_in_indicator_checked() {
-            format!(
-                "--enable-features=\"{}\" --disable-features=\"{}\"",
-                NEW_FEATURE, SIGN_IN_FEATURE
-            )
+            format!("--enable-features=\"{}\" --disable-features=\"{}\"", NEW_FEATURE, SIGN_IN_FEATURE)
         } else {
             format!("--enable-features=\"{}\"", NEW_FEATURE)
         }
@@ -628,10 +701,11 @@ impl App {
     }
 
     fn apply_custom_flags(&self) {
+        let standalone_text = self.text_standalone_flags.text();
         let enable_text = self.text_enable_features.text();
         let disable_text = self.text_disable_features.text();
 
-        let options = shortcut::get_custom_options_from_text(&enable_text, &disable_text);
+        let options = shortcut::get_custom_options_from_text(&standalone_text, &enable_text, &disable_text);
 
         if options.trim().is_empty() {
             self.status_box.set_text("Enter custom flags");
@@ -662,21 +736,19 @@ impl App {
 
     fn show_custom_flags(&self) {
         let current_arguments = shortcut::get_current_shortcut_arguments();
+        let standalone_options = shortcut::get_standalone_options_from_arguments(&current_arguments);
+        let enable_features = shortcut::get_feature_list_from_arguments(&current_arguments, "enable-features");
+        let disable_features = shortcut::get_feature_list_from_arguments(&current_arguments, "disable-features");
 
-        let enable_features =
-            shortcut::get_feature_list_from_arguments(&current_arguments, "enable-features");
-
-        let disable_features =
-            shortcut::get_feature_list_from_arguments(&current_arguments, "disable-features");
-
+        self.text_standalone_flags.set_text(&standalone_options);
         self.text_enable_features.set_text(&enable_features);
         self.text_disable_features.set_text(&disable_features);
 
         set_window_enabled(&self.window, false);
-        center_window_on_cursor_monitor(&self.custom_window);
+        center_window_on_cursor_monitor_with_offset(&self.custom_window, 0, CUSTOM_WINDOW_CENTER_Y_OFFSET);
         self.custom_window.set_visible(true);
         self.custom_window.set_focus();
-        self.text_enable_features.set_focus();
+        self.text_standalone_flags.set_focus();
     }
 
     fn close_custom_flags(&self) {
@@ -748,11 +820,7 @@ impl App {
 
         self.apply_all_help_text_format("Reminder", nwg::CharEffects::BOLD, NOTE_RED);
 
-        self.apply_all_help_text_format(
-            "edge://settings/system/manageSystem",
-            nwg::CharEffects::UNDERLINE,
-            LINK_BLUE,
-        );
+        self.apply_all_help_text_format("edge://settings/system/manageSystem", nwg::CharEffects::UNDERLINE, LINK_BLUE);
 
         set_rich_text_box_format_rect(&self.help_text, 4, 4, 4, 2);
         self.help_text.set_selection(0..0);
@@ -771,13 +839,7 @@ impl App {
         }
     }
 
-    fn apply_help_format(
-        &self,
-        start: usize,
-        end: usize,
-        effects: nwg::CharEffects,
-        color: [u8; 3],
-    ) {
+    fn apply_help_format(&self, start: usize, end: usize, effects: nwg::CharEffects, color: [u8; 3]) {
         let selection_start = rich_edit_position(HELP_TEXT, start);
         let selection_end = rich_edit_position(HELP_TEXT, end);
 
@@ -847,10 +909,7 @@ fn build_status_reports(last_apply_result: Option<&shortcut::ApplyResult>) -> (S
     )
 }
 
-fn write_shortcut_section(
-    report: &mut String,
-    last_apply_result: Option<&shortcut::ApplyResult>,
-) {
+fn write_shortcut_section(report: &mut String, last_apply_result: Option<&shortcut::ApplyResult>) {
     if let Some(result) = last_apply_result {
         let updated = result
             .details
@@ -914,10 +973,7 @@ fn write_shortcut_section(
     }
 }
 
-fn write_edge_candidate_section(
-    report: &mut String,
-    candidates: &[shortcut::EdgeExecutableCandidate],
-) {
+fn write_edge_candidate_section(report: &mut String, candidates: &[shortcut::EdgeExecutableCandidate]) {
     let selected = candidates.iter().find(|candidate| candidate.selected);
 
     let _ = writeln!(report, "Selected:");
@@ -946,17 +1002,10 @@ fn write_edge_candidate_section(
     }
 
     let _ = writeln!(report);
-    let _ = writeln!(
-        report,
-        "For reference and diagnostic purposes only."
-    );
+    let _ = writeln!(report, "For reference and diagnostic purposes only.");
 }
 
-fn write_candidate_entry(
-    report: &mut String,
-    candidate: &shortcut::EdgeExecutableCandidate,
-    status: &str,
-) {
+fn write_candidate_entry(report: &mut String, candidate: &shortcut::EdgeExecutableCandidate, status: &str) {
     let path_text = candidate
         .path
         .as_ref()
@@ -967,11 +1016,7 @@ fn write_candidate_entry(
     let _ = writeln!(report, "    {}", path_text);
 }
 
-fn write_shortcut_group(
-    report: &mut String,
-    title: &str,
-    details: &[&shortcut::ShortcutApplyDetail],
-) {
+fn write_shortcut_group(report: &mut String, title: &str, details: &[&shortcut::ShortcutApplyDetail]) {
     if details.is_empty() {
         return;
     }
@@ -1019,26 +1064,14 @@ fn show_plain_dialog(message: &str) {
 }
 
 fn get_hwnd(window: &nwg::Window) -> Option<HWND> {
-    window
-        .handle
-        .hwnd()
-        .map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
+    window.handle.hwnd().map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
 }
 
 fn get_control_hwnd(handle: &nwg::ControlHandle) -> Option<HWND> {
-    handle
-        .hwnd()
-        .map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
+    handle.hwnd().map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
 }
 
-
-fn set_rich_text_box_format_rect(
-    control: &nwg::RichTextBox,
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-) {
+fn set_rich_text_box_format_rect(control: &nwg::RichTextBox, left: i32, top: i32, right: i32, bottom: i32) {
     // Add inner padding to RichEdit controls without changing their outer size.
     let Some(hwnd) = get_control_hwnd(&control.handle) else {
         return;
@@ -1057,6 +1090,8 @@ fn set_rich_text_box_format_rect(
         bottom: height as i32 - bottom,
     };
 
+    // SAFETY: hwnd belongs to this RichTextBox, and rect lives for the
+    // synchronous EM_SETRECT message. RichEdit does not retain this pointer.
     unsafe {
         let _ = SendMessageW(
             hwnd,
@@ -1072,6 +1107,8 @@ fn set_window_enabled(window: &nwg::Window, enabled: bool) {
         return;
     };
 
+    // SAFETY: hwnd was obtained from a live NWG window handle. EnableWindow
+    // changes window state synchronously and does not retain pointers.
     unsafe {
         let _ = EnableWindow(hwnd, enabled);
     }
@@ -1083,6 +1120,8 @@ fn harden_window_chrome(window: &nwg::Window) {
         return;
     };
 
+    // SAFETY: hwnd was obtained from a live NWG window. These Win32 calls
+    // synchronously update window icon, style, menu, and frame state.
     unsafe {
         let _ = SendMessageW(
             hwnd,
@@ -1135,6 +1174,10 @@ fn harden_window_chrome(window: &nwg::Window) {
 }
 
 fn center_window_on_cursor_monitor(window: &nwg::Window) {
+    center_window_on_cursor_monitor_with_offset(window, 0, 0);
+}
+
+fn center_window_on_cursor_monitor_with_offset(window: &nwg::Window, offset_x: i32, offset_y: i32) {
     // Center popups on the monitor where the user is currently working.
     let Some(hwnd) = get_hwnd(window) else {
         return;
@@ -1142,6 +1185,8 @@ fn center_window_on_cursor_monitor(window: &nwg::Window) {
 
     let (window_width, window_height) = window.size();
 
+    // SAFETY: Uses initialized stack structs, validates Win32 return values,
+    // and passes no pointers that outlive the synchronous API calls.
     unsafe {
         let mut cursor = POINT { x: 0, y: 0 };
 
@@ -1170,8 +1215,10 @@ fn center_window_on_cursor_monitor(window: &nwg::Window) {
         let work_width = work.right - work.left;
         let work_height = work.bottom - work.top;
 
-        let x = work.left + (work_width - window_width as i32) / 2;
-        let y = work.top + (work_height - window_height as i32) / 2;
+        let centered_x = work.left + (work_width - window_width as i32) / 2;
+        let centered_y = work.top + (work_height - window_height as i32) / 2;
+        let x = (centered_x + offset_x).clamp(work.left, work.right - window_width as i32);
+        let y = (centered_y + offset_y).clamp(work.top, work.bottom - window_height as i32);
 
         let _ = SetWindowPos(
             hwnd,
@@ -1249,13 +1296,13 @@ fn bind_events(app: &Rc<App>) -> (
 }
 
 fn main() {
-    nwg::init().expect("failed to initialize native-windows-gui");
+    if let Err(error) = nwg::init() {
+        eprintln!("failed to initialize native-windows-gui: {}", error);
+        return;
+    }
 
     if let Err(error) = set_global_ui_font() {
-        show_plain_dialog(&format!(
-            "Failed to initialize Segoe UI font.\r\n\r\n{}",
-            error
-        ));
+        show_plain_dialog(&format!("Failed to initialize Segoe UI font.\r\n\r\n{}", error));
         return;
     }
 
@@ -1270,10 +1317,7 @@ fn main() {
     let app = match App::build() {
         Ok(app) => Rc::new(app),
         Err(error) => {
-            show_plain_dialog(&format!(
-                "Failed to build the user interface.\r\n\r\n{}",
-                error
-            ));
+            show_plain_dialog(&format!("Failed to build the user interface.\r\n\r\n{}", error));
             return;
         }
     };

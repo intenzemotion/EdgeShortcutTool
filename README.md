@@ -61,25 +61,34 @@ With **Hide sign-in red dot** checked:
 
 ### Restore default
 
-Removes Edge `--enable-features` and `--disable-features` from supported shortcuts.
+Removes Edge custom flags managed by this tool from supported shortcuts, including standalone switches and `--enable-features` / `--disable-features`.
 
 Other shortcut options, such as profile options, are preserved.
 
 ## Custom
 
-Custom accepts comma-separated feature names.
+Custom has three fields:
 
-Example:
+* **Standalone** accepts normal Edge command-line switches separated by spaces.
+* **Enable features** accepts comma-separated feature names.
+* **Disable features** accepts comma-separated feature names.
+
+Standalone example:
 
 ```text
-FeatureA,FeatureB
+--force-dark-mode --disable-extensions --mute-audio
 ```
 
-You can also paste full switches:
+Enable feature examples:
 
 ```text
---enable-features="FeatureA,FeatureB"
---disable-features="FeatureC,FeatureD"
+msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading
+```
+
+Disable feature examples:
+
+```text
+msShowSignInIndicator,msUndersideButton,MediaRouter
 ```
 
 ## Supported shortcuts
