@@ -10,14 +10,15 @@ use std::rc::Rc;
 use native_windows_gui as nwg;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DeleteMenu, DrawMenuBar, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GetCursorPos, GetSystemMenu,
-    GetWindowLongPtrW, ICON_BIG, ICON_SMALL, MF_BYCOMMAND, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
-    SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetClassLongPtrW, SetWindowLongPtrW, SetWindowPos, WM_SETICON, WS_EX_DLGMODALFRAME,
+    DeleteMenu, DrawMenuBar, GetCursorPos, GetSystemMenu, GetWindowLongPtrW, SendMessageW,
+    SetClassLongPtrW, SetWindowLongPtrW, SetWindowPos, GCLP_HICON, GCLP_HICONSM,
+    GWL_EXSTYLE, ICON_BIG, ICON_SMALL, MF_BYCOMMAND, SC_MAXIMIZE, SC_MINIMIZE,
+    SC_RESTORE, SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, WM_SETICON, WS_EX_DLGMODALFRAME,
 };
 
 const APP_TITLE: &str = "Edge Shortcut Tool";
@@ -27,6 +28,7 @@ const OLD_FEATURE: &str = "msFeatureGroupNewLookAndFeelHoldout";
 const NEW_FEATURE: &str = "msForceNoRoundedCornerAndMargin";
 const SIGN_IN_FEATURE: &str = "msShowSignInIndicator";
 const SIDEBAR_FEATURE: &str = "msHubAppsSidebarRetirement";
+const DISABLE_EXTENSIONS_OPTION: &str = "--disable-extensions";
 
 const COLOR_CONTROL: [u8; 3] = [240, 240, 240];
 const COLOR_WINDOW: [u8; 3] = [255, 255, 255];
@@ -56,9 +58,13 @@ const HELP_TEXT: &str = concat!(
     "When checked, this also disables msHubAppsSidebarRetirement.\r\n",
     "This attempts to restore the classic Edge sidebar app list.\r\n",
     "\r\n",
+    "Disable extensions\r\n",
+    "When checked, this also adds --disable-extensions.\r\n",
+    "This starts Edge without loading browser extensions.\r\n",
+    "\r\n",
     "Custom\r\n",
-    "Standalone example: --force-dark-mode --disable-extensions --mute-audio.\r\n",
-    "Enable example: msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading.\r\n",
+    "Standalone example: --disable-extensions --force-dark-mode --mute-audio.\r\n",
+    "Enable example: msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading.\r\n",
     "Disable example: msShowSignInIndicator,msHubAppsSidebarRetirement,MediaRouter.\r\n",
     "Applying custom flags replaces existing managed custom flags.\r\n",
     "\r\n",
@@ -68,7 +74,7 @@ const HELP_TEXT: &str = concat!(
     "\r\n",
     "Reminder\r\n",
     "Disable Startup Boost in Edge first. Copy and paste this into Edge address bar: ",
-    "edge://settings/system/manageSystem\r\n"
+    "edge://settings/system/manageSystem"
 );
 
 #[derive(Default)]
@@ -91,6 +97,7 @@ struct App {
 
     check_sign_in_indicator: nwg::CheckBox,
     check_restore_sidebar: nwg::CheckBox,
+    check_disable_extensions: nwg::CheckBox,
 
     status_box: nwg::RichTextBox,
     button_info: nwg::Button,
@@ -207,8 +214,9 @@ impl App {
         const CHECK_GAP: i32 = 2;
         const SIGN_IN_CHECK_Y: i32 = CHECK_Y;
         const SIDEBAR_CHECK_Y: i32 = SIGN_IN_CHECK_Y + CHECK_H + CHECK_GAP;
+        const EXTENSIONS_CHECK_Y: i32 = SIDEBAR_CHECK_Y + CHECK_H + CHECK_GAP;
 
-        const ACTION_Y: i32 = SIDEBAR_CHECK_Y + CHECK_H + 12;
+        const ACTION_Y: i32 = EXTENSIONS_CHECK_Y + CHECK_H + 12;
         const ACTION_H: i32 = 26;
         const ACTION_GAP: i32 = 5;
         const EXIT_W: i32 = 73;
@@ -333,8 +341,7 @@ impl App {
             .parent(&self.window)
             .build(&mut self.check_sign_in_indicator)?;
 
-        self.check_sign_in_indicator
-            .set_check_state(nwg::CheckBoxState::Checked);
+        self.check_sign_in_indicator.set_check_state(nwg::CheckBoxState::Checked);
 
         nwg::CheckBox::builder()
             .text("Restore sidebar")
@@ -342,6 +349,13 @@ impl App {
             .size((CHECK_W, CHECK_H))
             .parent(&self.window)
             .build(&mut self.check_restore_sidebar)?;
+
+        nwg::CheckBox::builder()
+            .text("Disable extensions")
+            .position((CHECK_X, EXTENSIONS_CHECK_Y))
+            .size((CHECK_W, CHECK_H))
+            .parent(&self.window)
+            .build(&mut self.check_disable_extensions)?;
 
         // RichTextBox gives the status field the same sunken Win32 look as the dialogs.
         nwg::RichTextBox::builder()
@@ -481,7 +495,7 @@ impl App {
         const TEXT_X: i32 = MARGIN;
         const TEXT_Y: i32 = MARGIN;
         const TEXT_W: i32 = WINDOW_W - (MARGIN * 2);
-        const TEXT_H: i32 = 532;
+        const TEXT_H: i32 = 572;
         const BUTTON_X: i32 = TEXT_X + TEXT_W - BUTTON_W;
         const BUTTON_Y: i32 = TEXT_Y + TEXT_H + BUTTON_SECTION_GAP;
         const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;
@@ -619,35 +633,20 @@ impl App {
     }
 
     fn build_tooltips(&mut self) -> Result<(), nwg::NwgError> {
-        let standalone_text = "Example: --force-dark-mode --disable-extensions --mute-audio";
-        let enable_text =
-            "Example: msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading";
+        let standalone_text = "Example: --disable-extensions --force-dark-mode --mute-audio";
+        let enable_text = "Example: msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading";
         let disable_text = "Example: msShowSignInIndicator,msHubAppsSidebarRetirement,MediaRouter";
 
         nwg::Tooltip::builder()
             .register(&self.button_custom, "Custom")
             .register(&self.button_help, "Help")
             .register(&self.button_info, "Info")
-            .register(
-                &self.button_old,
-                "--disable-features=msFeatureGroupNewLookAndFeelHoldout",
-            )
-            .register(
-                &self.button_new,
-                "--enable-features=msForceNoRoundedCornerAndMargin",
-            )
-            .register(
-                &self.button_default,
-                "Restore normal Edge shortcut settings",
-            )
-            .register(
-                &self.check_sign_in_indicator,
-                "--disable-features=msShowSignInIndicator",
-            )
-            .register(
-                &self.check_restore_sidebar,
-                "--disable-features=msHubAppsSidebarRetirement",
-            )
+            .register(&self.button_old, "--disable-features=msFeatureGroupNewLookAndFeelHoldout")
+            .register(&self.button_new, "--enable-features=msForceNoRoundedCornerAndMargin")
+            .register(&self.button_default, "Restore normal Edge shortcut settings")
+            .register(&self.check_sign_in_indicator, "--disable-features=msShowSignInIndicator")
+            .register(&self.check_restore_sidebar, "--disable-features=msHubAppsSidebarRetirement")
+            .register(&self.check_disable_extensions, "--disable-extensions")
             .register(&self.label_standalone_flags, standalone_text)
             .register(&self.text_standalone_flags, standalone_text)
             .register(&self.label_enable_features, enable_text)
@@ -711,6 +710,28 @@ impl App {
         self.check_restore_sidebar.check_state() == nwg::CheckBoxState::Checked
     }
 
+    fn disable_extensions_checked(&self) -> bool {
+        self.check_disable_extensions.check_state() == nwg::CheckBoxState::Checked
+    }
+
+    fn get_standalone_options(&self) -> String {
+        if self.disable_extensions_checked() {
+            DISABLE_EXTENSIONS_OPTION.to_string()
+        } else {
+            String::new()
+        }
+    }
+
+    fn get_options_with_standalone(&self, feature_options: &str) -> String {
+        let standalone_options = self.get_standalone_options();
+
+        if standalone_options.is_empty() {
+            feature_options.to_string()
+        } else {
+            format!("{} {}", standalone_options, feature_options)
+        }
+    }
+
     fn get_disable_features(&self, base_features: &[&str]) -> String {
         let mut features = Vec::new();
 
@@ -728,21 +749,20 @@ impl App {
 
     fn get_old_options(&self) -> String {
         let disable_features = self.get_disable_features(&[OLD_FEATURE]);
+        let feature_options = format!("--disable-features=\"{}\"", disable_features);
 
-        format!("--disable-features=\"{}\"", disable_features)
+        self.get_options_with_standalone(&feature_options)
     }
 
     fn get_new_options(&self) -> String {
         let disable_features = self.get_disable_features(&[]);
-
-        if disable_features.is_empty() {
+        let feature_options = if disable_features.is_empty() {
             format!("--enable-features=\"{}\"", NEW_FEATURE)
         } else {
-            format!(
-                "--enable-features=\"{}\" --disable-features=\"{}\"",
-                NEW_FEATURE, disable_features
-            )
-        }
+            format!("--enable-features=\"{}\" --disable-features=\"{}\"", NEW_FEATURE, disable_features)
+        };
+
+        self.get_options_with_standalone(&feature_options)
     }
 
     fn apply_old_workaround(&self) {
@@ -760,8 +780,7 @@ impl App {
         let enable_text = self.text_enable_features.text();
         let disable_text = self.text_disable_features.text();
 
-        let options =
-            shortcut::get_custom_options_from_text(&standalone_text, &enable_text, &disable_text);
+        let options = shortcut::get_custom_options_from_text(&standalone_text, &enable_text, &disable_text);
 
         if options.trim().is_empty() {
             self.status_box.set_text("Enter custom flags");
@@ -792,23 +811,16 @@ impl App {
 
     fn show_custom_flags(&self) {
         let current_arguments = shortcut::get_current_shortcut_arguments();
-        let standalone_options =
-            shortcut::get_standalone_options_from_arguments(&current_arguments);
-        let enable_features =
-            shortcut::get_feature_list_from_arguments(&current_arguments, "enable-features");
-        let disable_features =
-            shortcut::get_feature_list_from_arguments(&current_arguments, "disable-features");
+        let standalone_options = shortcut::get_standalone_options_from_arguments(&current_arguments);
+        let enable_features = shortcut::get_feature_list_from_arguments(&current_arguments, "enable-features");
+        let disable_features = shortcut::get_feature_list_from_arguments(&current_arguments, "disable-features");
 
         self.text_standalone_flags.set_text(&standalone_options);
         self.text_enable_features.set_text(&enable_features);
         self.text_disable_features.set_text(&disable_features);
 
         set_window_enabled(&self.window, false);
-        center_window_on_cursor_monitor_with_offset(
-            &self.custom_window,
-            0,
-            CUSTOM_WINDOW_CENTER_Y_OFFSET,
-        );
+        center_window_on_cursor_monitor_with_offset(&self.custom_window, 0, CUSTOM_WINDOW_CENTER_Y_OFFSET);
         self.custom_window.set_visible(true);
         self.custom_window.set_focus();
         self.text_standalone_flags.set_focus();
@@ -876,6 +888,7 @@ impl App {
             "Restore default",
             "Hide sign-in red dot",
             "Restore sidebar",
+            "Disable extensions",
             "Custom",
             "Info",
         ] {
@@ -884,11 +897,7 @@ impl App {
 
         self.apply_all_help_text_format("Reminder", nwg::CharEffects::BOLD, NOTE_RED);
 
-        self.apply_all_help_text_format(
-            "edge://settings/system/manageSystem",
-            nwg::CharEffects::UNDERLINE,
-            LINK_BLUE,
-        );
+        self.apply_all_help_text_format("edge://settings/system/manageSystem", nwg::CharEffects::UNDERLINE, LINK_BLUE);
 
         set_rich_text_box_format_rect(&self.help_text, 4, 4, 4, 2);
         self.help_text.set_selection(0..0);
@@ -907,13 +916,7 @@ impl App {
         }
     }
 
-    fn apply_help_format(
-        &self,
-        start: usize,
-        end: usize,
-        effects: nwg::CharEffects,
-        color: [u8; 3],
-    ) {
+    fn apply_help_format(&self, start: usize, end: usize, effects: nwg::CharEffects, color: [u8; 3]) {
         let selection_start = rich_edit_position(HELP_TEXT, start);
         let selection_end = rich_edit_position(HELP_TEXT, end);
 
@@ -1008,12 +1011,8 @@ fn write_shortcut_section(report: &mut String, last_apply_result: Option<&shortc
         write_shortcut_group(report, "Missing", &missing);
 
         let _ = writeln!(
-            report,
-            "Latest summary: {} found, {} updated, {} missing, {} failed",
-            result.found_shortcuts,
-            updated.len(),
-            missing.len(),
-            failed.len()
+            report, "Latest summary: {} found, {} updated, {} missing, {} failed",
+            result.found_shortcuts, updated.len(), missing.len(), failed.len()
         );
     } else {
         let mut found = Vec::new();
@@ -1051,10 +1050,7 @@ fn write_shortcut_section(report: &mut String, last_apply_result: Option<&shortc
     }
 }
 
-fn write_edge_candidate_section(
-    report: &mut String,
-    candidates: &[shortcut::EdgeExecutableCandidate],
-) {
+fn write_edge_candidate_section(report: &mut String, candidates: &[shortcut::EdgeExecutableCandidate]) {
     let selected = candidates.iter().find(|candidate| candidate.selected);
 
     let _ = writeln!(report, "Selected:");
@@ -1086,11 +1082,7 @@ fn write_edge_candidate_section(
     let _ = writeln!(report, "For reference and diagnostic purposes only.");
 }
 
-fn write_candidate_entry(
-    report: &mut String,
-    candidate: &shortcut::EdgeExecutableCandidate,
-    status: &str,
-) {
+fn write_candidate_entry(report: &mut String, candidate: &shortcut::EdgeExecutableCandidate, status: &str) {
     let path_text = candidate
         .path
         .as_ref()
@@ -1101,11 +1093,7 @@ fn write_candidate_entry(
     let _ = writeln!(report, "    {}", path_text);
 }
 
-fn write_shortcut_group(
-    report: &mut String,
-    title: &str,
-    details: &[&shortcut::ShortcutApplyDetail],
-) {
+fn write_shortcut_group(report: &mut String, title: &str, details: &[&shortcut::ShortcutApplyDetail]) {
     if details.is_empty() {
         return;
     }
@@ -1153,25 +1141,14 @@ fn show_plain_dialog(message: &str) {
 }
 
 fn get_hwnd(window: &nwg::Window) -> Option<HWND> {
-    window
-        .handle
-        .hwnd()
-        .map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
+    window.handle.hwnd().map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
 }
 
 fn get_control_hwnd(handle: &nwg::ControlHandle) -> Option<HWND> {
-    handle
-        .hwnd()
-        .map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
+    handle.hwnd().map(|hwnd| HWND(hwnd as *mut core::ffi::c_void))
 }
 
-fn set_rich_text_box_format_rect(
-    control: &nwg::RichTextBox,
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-) {
+fn set_rich_text_box_format_rect(control: &nwg::RichTextBox, left: i32, top: i32, right: i32, bottom: i32) {
     // Add inner padding to RichEdit controls without changing their outer size.
     let Some(hwnd) = get_control_hwnd(&control.handle) else {
         return;
@@ -1241,7 +1218,11 @@ fn harden_window_chrome(window: &nwg::Window) {
         let _ = SetClassLongPtrW(hwnd, GCLP_HICON, 0);
 
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        let _ = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_DLGMODALFRAME.0 as isize);
+        let _ = SetWindowLongPtrW(
+            hwnd,
+            GWL_EXSTYLE,
+            ex_style | WS_EX_DLGMODALFRAME.0 as isize,
+        );
 
         let system_menu = GetSystemMenu(hwnd, false);
 
@@ -1260,7 +1241,11 @@ fn harden_window_chrome(window: &nwg::Window) {
             0,
             0,
             0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            SWP_NOMOVE
+                | SWP_NOSIZE
+                | SWP_NOZORDER
+                | SWP_NOACTIVATE
+                | SWP_FRAMECHANGED,
         );
     }
 }
@@ -1337,9 +1322,7 @@ fn set_global_ui_font() -> Result<(), nwg::NwgError> {
     Ok(())
 }
 
-fn bind_events(
-    app: &Rc<App>,
-) -> (
+fn bind_events(app: &Rc<App>) -> (
     nwg::EventHandler,
     nwg::EventHandler,
     nwg::EventHandler,
@@ -1349,34 +1332,42 @@ fn bind_events(
     let main_handle = app.window.handle.clone();
     let main_app = Rc::clone(app);
 
-    let main_events =
-        nwg::full_bind_event_handler(&main_handle, move |event, _event_data, handle| {
+    let main_events = nwg::full_bind_event_handler(
+        &main_handle,
+        move |event, _event_data, handle| {
             main_app.process_event(event, handle);
-        });
+        },
+    );
 
     let custom_handle = app.custom_window.handle.clone();
     let custom_app = Rc::clone(app);
 
-    let custom_events =
-        nwg::full_bind_event_handler(&custom_handle, move |event, _event_data, handle| {
+    let custom_events = nwg::full_bind_event_handler(
+        &custom_handle,
+        move |event, _event_data, handle| {
             custom_app.process_event(event, handle);
-        });
+        },
+    );
 
     let help_handle = app.help_window.handle.clone();
     let help_app = Rc::clone(app);
 
-    let help_events =
-        nwg::full_bind_event_handler(&help_handle, move |event, _event_data, handle| {
+    let help_events = nwg::full_bind_event_handler(
+        &help_handle,
+        move |event, _event_data, handle| {
             help_app.process_event(event, handle);
-        });
+        },
+    );
 
     let status_handle = app.status_window.handle.clone();
     let status_app = Rc::clone(app);
 
-    let status_events =
-        nwg::full_bind_event_handler(&status_handle, move |event, _event_data, handle| {
+    let status_events = nwg::full_bind_event_handler(
+        &status_handle,
+        move |event, _event_data, handle| {
             status_app.process_event(event, handle);
-        });
+        },
+    );
 
     (main_events, custom_events, help_events, status_events)
 }
@@ -1388,10 +1379,7 @@ fn main() {
     }
 
     if let Err(error) = set_global_ui_font() {
-        show_plain_dialog(&format!(
-            "Failed to initialize Segoe UI font.\r\n\r\n{}",
-            error
-        ));
+        show_plain_dialog(&format!("Failed to initialize Segoe UI font.\r\n\r\n{}", error));
         return;
     }
 
@@ -1406,10 +1394,7 @@ fn main() {
     let app = match App::build() {
         Ok(app) => Rc::new(app),
         Err(error) => {
-            show_plain_dialog(&format!(
-                "Failed to build the user interface.\r\n\r\n{}",
-                error
-            ));
+            show_plain_dialog(&format!("Failed to build the user interface.\r\n\r\n{}", error));
             return;
         }
     };

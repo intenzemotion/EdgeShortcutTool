@@ -2,12 +2,11 @@
 
 A small Windows utility for applying Microsoft Edge shortcut settings.
 
-Remove rounded corners, hide sign-in red dot, restore default shortcut settings, and apply custom flags.
-
 ## Features
 
 * Rounded-corner workarounds
 * Hide sign-in red dot
+* Restore sidebar
 * Custom feature flags
 * Native Windows app
 
@@ -29,7 +28,7 @@ Then fully close and restart Edge after applying changes.
    * **Old workaround**
    * **New workaround**
    * **Restore default**
-3. Keep **Hide sign-in red dot** checked if needed.
+3. Keep **Hide sign-in red dot** or **Restore sidebar** checked if needed.
 4. Use **...** for Custom and **i** for Info.
 5. Restart Edge.
 
@@ -76,13 +75,13 @@ Custom has three fields:
 Standalone example:
 
 ```text
---force-dark-mode --disable-extensions --mute-audio
+--disable-extensions --force-dark-mode --mute-audio
 ```
 
 Enable feature examples:
 
 ```text
-msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading
+msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading
 ```
 
 Disable feature examples:

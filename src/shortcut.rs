@@ -2,12 +2,12 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use windows::core::{HSTRING, Interface, Result as WinResult};
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    CoUninitialize, IPersistFile, STGM,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+    COINIT_APARTMENTTHREADED, STGM,
 };
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
-use windows::core::{HSTRING, Interface, Result as WinResult};
 
 const ARGUMENT_BUFFER_LEN: usize = 32_768;
 const EDGE_SHORTCUT_NAME: &str = "Microsoft Edge.lnk";
@@ -130,12 +130,8 @@ pub fn get_shortcut_paths() -> Vec<PathBuf> {
 
         paths.push(app_data.join(r"Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk"));
         paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\Microsoft Edge.lnk"));
-        paths.push(app_data.join(
-            r"Microsoft\Internet Explorer\Quick Launch\User Pinned\StartMenu\Microsoft Edge.lnk",
-        ));
-        paths.push(app_data.join(
-            r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Microsoft Edge.lnk",
-        ));
+        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\StartMenu\Microsoft Edge.lnk"));
+        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Microsoft Edge.lnk"));
 
         add_implicit_edge_shortcuts(&mut paths, &app_data);
     }
@@ -147,8 +143,7 @@ pub fn get_shortcut_paths() -> Vec<PathBuf> {
 
 fn add_implicit_edge_shortcuts(paths: &mut Vec<PathBuf>, app_data: &Path) {
     // Some pinned shortcuts live inside hashed ImplicitAppShortcuts folders.
-    let root =
-        app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts");
+    let root = app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts");
 
     let Ok(hash_dirs) = fs::read_dir(root) else {
         return;
@@ -235,7 +230,7 @@ pub fn normalize_feature_list(text: &str) -> String {
 
 pub fn normalize_standalone_options(text: &str) -> String {
     // Standalone switches are entered as normal command-line switches, for example:
-    // --force-dark-mode --disable-extensions --mute-audio
+    // --disable-extensions --force-dark-mode --mute-audio
     split_argument_tokens(text)
         .into_iter()
         .map(|token| token.trim().to_string())
@@ -244,11 +239,7 @@ pub fn normalize_standalone_options(text: &str) -> String {
         .join(" ")
 }
 
-pub fn get_custom_options_from_text(
-    standalone_text: &str,
-    enable_text: &str,
-    disable_text: &str,
-) -> String {
+pub fn get_custom_options_from_text(standalone_text: &str, enable_text: &str, disable_text: &str) -> String {
     let standalone_options = normalize_standalone_options(standalone_text);
     let enable_features = normalize_feature_list(enable_text);
     let disable_features = normalize_feature_list(disable_text);
@@ -359,9 +350,7 @@ fn get_separated_switch_value(tokens: &[String], switch_index: usize) -> Option<
     let next = tokens.get(next_index)?;
 
     if next == "=" {
-        return tokens
-            .get(next_index + 1)
-            .map(|value| (value.as_str(), next_index + 2));
+        return tokens.get(next_index + 1).map(|value| (value.as_str(), next_index + 2));
     }
 
     if let Some(value) = next.strip_prefix('=') {
@@ -445,11 +434,7 @@ fn skip_separated_switch_value(tokens: &[String], switch_index: usize) -> usize 
     next_index
 }
 
-fn keep_preserved_shortcut_switch(
-    tokens: &[String],
-    switch_index: usize,
-    kept: &mut Vec<String>,
-) -> usize {
+fn keep_preserved_shortcut_switch(tokens: &[String], switch_index: usize, kept: &mut Vec<String>) -> usize {
     let token = &tokens[switch_index];
     kept.push(token.clone());
 
@@ -491,11 +476,7 @@ fn skip_preserved_shortcut_switch(tokens: &[String], switch_index: usize) -> usi
     skip_separated_switch_value(tokens, switch_index)
 }
 
-fn push_standalone_switch(
-    tokens: &[String],
-    switch_index: usize,
-    items: &mut Vec<String>,
-) -> usize {
+fn push_standalone_switch(tokens: &[String], switch_index: usize, items: &mut Vec<String>) -> usize {
     let token = &tokens[switch_index];
     items.push(token.clone());
 
@@ -528,9 +509,9 @@ fn is_switch_token(token: &str) -> bool {
 }
 
 fn is_managed_feature_switch_with_inline_value(token: &str) -> bool {
-    for switch_name in MANAGED_FEATURE_SWITCH_NAMES {
-        let lower = token.to_ascii_lowercase();
+    let lower = token.to_ascii_lowercase();
 
+    for switch_name in MANAGED_FEATURE_SWITCH_NAMES {
         if !lower.starts_with(switch_name) {
             continue;
         }
@@ -632,8 +613,7 @@ fn read_shortcut_arguments(path: &Path) -> Option<String> {
     // SAFETY: COM is initialized before this function is called. The COM wrappers
     // own their interface lifetimes, and the stack buffer lives for GetArguments.
     unsafe {
-        let shell_link: IShellLinkW =
-            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
+        let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
 
         let persist_file: IPersistFile = shell_link.cast().ok()?;
         let path_string = path.to_string_lossy().to_string();
@@ -742,33 +722,29 @@ pub fn apply_options(options: &str) -> ApplyResult {
 mod tests {
     use super::*;
 
-    const STANDALONE_EXAMPLE: &str = "--force-dark-mode --disable-extensions --mute-audio";
-    const ENABLE_EXAMPLE: &str =
-        "msForceNoRoundedCornerAndMargin,msDownloadsHub,ParallelDownloading";
+    const STANDALONE_EXAMPLE: &str = "--disable-extensions --force-dark-mode --mute-audio";
+    const ENABLE_EXAMPLE: &str = "msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading";
     const DISABLE_EXAMPLE: &str = "msShowSignInIndicator,msUndersideButton,MediaRouter";
 
     #[test]
     fn normalizes_plain_feature_list() {
-        let input = " msForceNoRoundedCornerAndMargin, msDownloadsHub ,, ParallelDownloading ";
+        let input = " msForceNoRoundedCornerAndMargin, msUndersideButton ,, ParallelDownloading ";
 
         assert_eq!(normalize_feature_list(input), ENABLE_EXAMPLE);
     }
 
     #[test]
     fn normalizes_full_enable_switch() {
-        let input = r#"--enable-features="msForceNoRoundedCornerAndMargin, msDownloadsHub""#;
+        let input = r#"--enable-features="msForceNoRoundedCornerAndMargin, msUndersideButton""#;
 
-        assert_eq!(
-            normalize_feature_list(input),
-            "msForceNoRoundedCornerAndMargin,msDownloadsHub"
-        );
+        assert_eq!(normalize_feature_list(input), "msForceNoRoundedCornerAndMargin,msUndersideButton");
     }
 
     #[test]
     fn builds_custom_options() {
         let options = get_custom_options_from_text(
             STANDALONE_EXAMPLE,
-            "msForceNoRoundedCornerAndMargin, msDownloadsHub, ParallelDownloading",
+            "msForceNoRoundedCornerAndMargin, msUndersideButton, ParallelDownloading",
             r#"--disable-features="msShowSignInIndicator,msUndersideButton,MediaRouter""#,
         );
 
@@ -784,12 +760,12 @@ mod tests {
     fn extracts_enable_features_from_arguments() {
         let args = format!(
             r#"--profile-directory="Profile 1" --enable-features="{}" --disable-features="msShowSignInIndicator""#,
-            "msForceNoRoundedCornerAndMargin,msDownloadsHub"
+            "msForceNoRoundedCornerAndMargin,msUndersideButton"
         );
 
         assert_eq!(
             get_feature_list_from_arguments(&args, "enable-features"),
-            "msForceNoRoundedCornerAndMargin,msDownloadsHub"
+            "msForceNoRoundedCornerAndMargin,msUndersideButton"
         );
     }
 
@@ -797,19 +773,16 @@ mod tests {
     fn extracts_multiple_same_switches() {
         let args = concat!(
             r#"--enable-features=msForceNoRoundedCornerAndMargin "#,
-            r#"--enable-features="msDownloadsHub,ParallelDownloading""#
+            r#"--enable-features="msUndersideButton,ParallelDownloading""#
         );
 
-        assert_eq!(
-            get_feature_list_from_arguments(args, "enable-features"),
-            ENABLE_EXAMPLE
-        );
+        assert_eq!(get_feature_list_from_arguments(args, "enable-features"), ENABLE_EXAMPLE);
     }
 
     #[test]
     fn merges_arguments_without_dropping_unrelated_arguments() {
         let existing = concat!(
-            r#"--profile-directory="Profile 1" --enable-features="msDownloadsHub" "#,
+            r#"--profile-directory="Profile 1" --enable-features="msUndersideButton" "#,
             r#"--disable-extensions --app-id=abc"#
         );
         let managed = r#"--mute-audio --disable-features="MediaRouter""#;
@@ -837,20 +810,17 @@ mod tests {
     #[test]
     fn extracts_standalone_options_from_arguments() {
         let args = concat!(
-            r#"--profile-directory="Default" --force-dark-mode "#,
+            r#"--profile-directory="Default" --disable-extensions "#,
             r#"--enable-features="msForceNoRoundedCornerAndMargin" "#,
-            r#"--disable-extensions --mute-audio"#
+            r#"--force-dark-mode --mute-audio"#
         );
 
-        assert_eq!(
-            get_standalone_options_from_arguments(args),
-            STANDALONE_EXAMPLE
-        );
+        assert_eq!(get_standalone_options_from_arguments(args), STANDALONE_EXAMPLE);
     }
 
     #[test]
     fn non_ascii_arguments_do_not_break_tokenization() {
-        let existing = r#"--profile-directory="Profilé 1" --enable-features="msDownloadsHub""#;
+        let existing = r#"--profile-directory="Profilé 1" --enable-features="msUndersideButton""#;
 
         assert_eq!(
             merge_shortcut_arguments(existing, r#"--disable-features="MediaRouter""#),
