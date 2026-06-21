@@ -4,7 +4,7 @@
   manifestVersion="1.0">
 
   <assemblyIdentity
-    version="1.0.0.0"
+    version="1.2.0.0"
     processorArchitecture="*"
     name="EdgeShortcutTool"
     type="win32" />
