@@ -49,8 +49,7 @@ const HELP_TEXT: &str = concat!(
     "This is the newer/more direct method for removing rounded corners and margins.\r\n",
     "\r\n",
     "Restore default\r\n",
-    "Removes existing Edge custom shortcut flags managed by this tool.\r\n",
-    "Other shortcut arguments, such as profile arguments, are preserved.\r\n",
+    "Clears all Edge shortcut command-line arguments for selected shortcuts.\r\n",
     "\r\n",
     "Hide sign-in red dot\r\n",
     "When checked, this also disables msShowSignInIndicator.\r\n",
@@ -72,7 +71,7 @@ const HELP_TEXT: &str = concat!(
     "Standalone example: --disable-extensions --force-dark-mode --mute-audio.\r\n",
     "Enable example: msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading.\r\n",
     "Disable example: msShowSignInIndicator,msHubAppsSidebarRetirement,MediaRouter.\r\n",
-    "Applying custom flags replaces existing managed custom flags.\r\n",
+    "Applying custom flags replaces full shortcut argument string.\r\n",
     "\r\n",
     "Info\r\n",
     "Displays executable candidates and selected shortcut locations.\r\n",
@@ -618,7 +617,7 @@ impl App {
         const TEXT_X: i32 = MARGIN;
         const TEXT_Y: i32 = MARGIN;
         const TEXT_W: i32 = WINDOW_W - (MARGIN * 2);
-        const TEXT_H: i32 = 636;
+        const TEXT_H: i32 = 625;
         const BUTTON_X: i32 = TEXT_X + TEXT_W - BUTTON_W;
         const BUTTON_Y: i32 = TEXT_Y + TEXT_H + BUTTON_SECTION_GAP;
         const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;

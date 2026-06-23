@@ -16,13 +16,6 @@ use windows::Win32::UI::Shell::{
 
 const ARGUMENT_BUFFER_LEN: usize = 32_768;
 const MANAGED_FEATURE_SWITCH_NAMES: [&str; 2] = ["--enable-features", "--disable-features"];
-const PRESERVED_SHORTCUT_SWITCH_NAMES: [&str; 5] = [
-    "--profile-directory",
-    "--profile-email",
-    "--app-id",
-    "--app",
-    "--user-data-dir"
-];
 
 #[derive(Clone, Copy)]
 pub struct ShortcutTarget {
@@ -159,7 +152,7 @@ pub struct ApplyResult {
 }
 
 pub fn get_edge_executable_candidates() -> Vec<EdgeExecutableCandidate> {
-    // Used by the Info window only; existing shortcut target paths are preserved.
+    // Used by the Info window only; shortcut target paths are not changed.
     let mut candidates = Vec::new();
 
     for (source, variable_name, relative_path) in [
@@ -173,8 +166,7 @@ pub fn get_edge_executable_candidates() -> Vec<EdgeExecutableCandidate> {
         ("Canary - ProgramFiles(x86)", "ProgramFiles(x86)", r"Microsoft\Edge SxS\Application\msedge.exe"),
         ("Canary - LocalAppData", "LocalAppData", r"Microsoft\Edge SxS\Application\msedge.exe")
     ] {
-        let path = env::var_os(variable_name)
-            .map(|base| PathBuf::from(base).join(relative_path));
+        let path = env::var_os(variable_name).map(|base| PathBuf::from(base).join(relative_path));
 
         let exists = path.as_ref().map(|path| path.exists()).unwrap_or(false);
 
@@ -274,19 +266,14 @@ fn get_current_user_desktop_path() -> Option<PathBuf> {
 
         CoTaskMemFree(Some(path.as_ptr() as *const core::ffi::c_void));
 
-        value
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
+        value.filter(|value| !value.trim().is_empty()).map(PathBuf::from)
     }
 }
 
 fn get_system_profile_app_data() -> Option<PathBuf> {
     let windows_root = env::var_os("SystemRoot").or_else(|| env::var_os("WinDir"))?;
 
-    Some(
-        PathBuf::from(windows_root)
-            .join(r"System32\config\systemprofile\AppData\Roaming")
-    )
+    Some(PathBuf::from(windows_root).join(r"System32\config\systemprofile\AppData\Roaming"))
 }
 
 fn add_roaming_shortcuts(paths: &mut Vec<PathBuf>, app_data: &Path, targets: &[ShortcutTarget]) {
@@ -421,8 +408,7 @@ pub fn get_custom_options_from_text(standalone_text: &str, enable_text: &str, di
 }
 
 pub fn get_standalone_options_from_arguments(arguments: &str) -> String {
-    // Prefill Custom Standalone from existing non-feature switches while leaving common
-    // shortcut-owned switches, such as profile and app launch arguments, hidden.
+    // Prefill Custom Standalone from every existing non-feature switch.
     let tokens = split_argument_tokens(arguments);
     let mut items = Vec::new();
     let mut index = 0usize;
@@ -437,11 +423,6 @@ pub fn get_standalone_options_from_arguments(arguments: &str) -> String {
 
         if is_exact_managed_feature_switch(token) {
             index = skip_separated_switch_value(&tokens, index);
-            continue;
-        }
-
-        if is_preserved_shortcut_switch(token) {
-            index = skip_preserved_shortcut_switch(&tokens, index);
             continue;
         }
 
@@ -523,53 +504,8 @@ fn get_separated_switch_value(tokens: &[String], switch_index: usize) -> Option<
     Some((next.as_str(), next_index + 1))
 }
 
-pub fn merge_shortcut_arguments(existing_arguments: &str, managed_options: &str) -> String {
-    // Replace the switches managed by this tool while preserving common shortcut-owned
-    // arguments such as profile and app launch arguments.
-    let preserved = strip_managed_custom_switches(existing_arguments);
-    let managed_options = managed_options.trim();
-
-    match (preserved.is_empty(), managed_options.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => managed_options.to_string(),
-        (false, true) => preserved,
-        (false, false) => format!("{} {}", preserved, managed_options)
-    }
-}
-
-fn strip_managed_custom_switches(arguments: &str) -> String {
-    let tokens = split_argument_tokens(arguments);
-    let mut kept = Vec::new();
-    let mut index = 0usize;
-
-    while index < tokens.len() {
-        let token = &tokens[index];
-
-        if is_managed_feature_switch_with_inline_value(token) {
-            index += 1;
-            continue;
-        }
-
-        if is_exact_managed_feature_switch(token) {
-            index = skip_separated_switch_value(&tokens, index);
-            continue;
-        }
-
-        if is_preserved_shortcut_switch(token) {
-            index = keep_preserved_shortcut_switch(&tokens, index, &mut kept);
-            continue;
-        }
-
-        if is_switch_token(token) {
-            index = skip_separated_switch_value(&tokens, index);
-            continue;
-        }
-
-        kept.push(token.clone());
-        index += 1;
-    }
-
-    kept.join(" ")
+pub fn merge_shortcut_arguments(_existing_arguments: &str, managed_options: &str) -> String {
+    managed_options.trim().to_string()
 }
 
 fn skip_separated_switch_value(tokens: &[String], switch_index: usize) -> usize {
@@ -591,48 +527,6 @@ fn skip_separated_switch_value(tokens: &[String], switch_index: usize) -> usize 
     }
 
     next_index
-}
-
-fn keep_preserved_shortcut_switch(tokens: &[String], switch_index: usize, kept: &mut Vec<String>) -> usize {
-    let token = &tokens[switch_index];
-    kept.push(token.clone());
-
-    if !is_exact_preserved_shortcut_switch(token) {
-        return switch_index + 1;
-    }
-
-    let next_index = switch_index + 1;
-    let Some(next) = tokens.get(next_index) else {
-        return next_index;
-    };
-
-    if next == "=" {
-        kept.push(next.clone());
-
-        if let Some(value) = tokens.get(next_index + 1) {
-            kept.push(value.clone());
-            return next_index + 2;
-        }
-
-        return next_index + 1;
-    }
-
-    if next.starts_with('=') || !next.starts_with("--") {
-        kept.push(next.clone());
-        return next_index + 1;
-    }
-
-    next_index
-}
-
-fn skip_preserved_shortcut_switch(tokens: &[String], switch_index: usize) -> usize {
-    let token = &tokens[switch_index];
-
-    if !is_exact_preserved_shortcut_switch(token) {
-        return switch_index + 1;
-    }
-
-    skip_separated_switch_value(tokens, switch_index)
 }
 
 fn push_standalone_switch(tokens: &[String], switch_index: usize, items: &mut Vec<String>) -> usize {
@@ -688,39 +582,7 @@ fn is_managed_feature_switch_with_inline_value(token: &str) -> bool {
 }
 
 fn is_exact_managed_feature_switch(token: &str) -> bool {
-    MANAGED_FEATURE_SWITCH_NAMES
-        .iter()
-        .any(|switch_name| token.eq_ignore_ascii_case(switch_name))
-}
-
-fn is_preserved_shortcut_switch(token: &str) -> bool {
-    if is_exact_preserved_shortcut_switch(token) {
-        return true;
-    }
-
-    let lower = token.to_ascii_lowercase();
-
-    for switch_name in PRESERVED_SHORTCUT_SWITCH_NAMES {
-        if !lower.starts_with(switch_name) {
-            continue;
-        }
-
-        let Some(rest) = lower.get(switch_name.len()..) else {
-            continue;
-        };
-
-        if rest.starts_with('=') {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn is_exact_preserved_shortcut_switch(token: &str) -> bool {
-    PRESERVED_SHORTCUT_SWITCH_NAMES
-        .iter()
-        .any(|switch_name| token.eq_ignore_ascii_case(switch_name))
+    MANAGED_FEATURE_SWITCH_NAMES.iter().any(|switch_name| token.eq_ignore_ascii_case(switch_name))
 }
 
 fn split_argument_tokens(arguments: &str) -> Vec<String> {
@@ -784,11 +646,7 @@ fn read_shortcut_arguments(path: &Path) -> Option<String> {
 
         shell_link.GetArguments(&mut buffer).ok()?;
 
-        let len = buffer
-            .iter()
-            .position(|value| *value == 0)
-            .unwrap_or(buffer.len());
-
+        let len = buffer.iter().position(|value| *value == 0).unwrap_or(buffer.len());
         let arguments = String::from_utf16_lossy(&buffer[..len]);
 
         if arguments.trim().is_empty() {
@@ -821,18 +679,9 @@ fn update_shortcut_arguments(path: &Path, managed_options: &str) -> WinResult<()
 
         persist_file.Load(&path_hstring, STGM(0))?;
 
-        let mut buffer = [0u16; ARGUMENT_BUFFER_LEN];
-        shell_link.GetArguments(&mut buffer)?;
+        let arguments = merge_shortcut_arguments("", managed_options);
 
-        let len = buffer
-            .iter()
-            .position(|value| *value == 0)
-            .unwrap_or(buffer.len());
-
-        let existing_arguments = String::from_utf16_lossy(&buffer[..len]);
-        let merged_arguments = merge_shortcut_arguments(&existing_arguments, managed_options);
-
-        shell_link.SetArguments(&HSTRING::from(merged_arguments))?;
+        shell_link.SetArguments(&HSTRING::from(arguments))?;
         persist_file.Save(&path_hstring, true)?;
     }
 
@@ -940,31 +789,25 @@ mod tests {
     }
 
     #[test]
-    fn merges_arguments_without_dropping_unrelated_arguments() {
+    fn merge_replaces_existing_arguments() {
         let existing = concat!(
             r#"--profile-directory="Profile 1" --enable-features="msUndersideButton" "#,
             r#"--disable-extensions --app-id=abc"#
         );
         let managed = r#"--mute-audio --disable-features="MediaRouter""#;
 
-        assert_eq!(
-            merge_shortcut_arguments(existing, managed),
-            r#"--profile-directory="Profile 1" --app-id=abc --mute-audio --disable-features="MediaRouter""#
-        );
+        assert_eq!(merge_shortcut_arguments(existing, managed), managed);
     }
 
     #[test]
-    fn restore_default_removes_custom_switches_but_keeps_shortcut_arguments() {
+    fn restore_default_clears_arguments() {
         let existing = concat!(
             r#"--profile-directory="Default" "#,
             r#"--disable-features="msShowSignInIndicator,MediaRouter" "#,
             r#"--disable-extensions --app-id=abc"#
         );
 
-        assert_eq!(
-            merge_shortcut_arguments(existing, ""),
-            r#"--profile-directory="Default" --app-id=abc"#
-        );
+        assert_eq!(merge_shortcut_arguments(existing, ""), "");
     }
 
     #[test]
@@ -975,16 +818,19 @@ mod tests {
             r#"--force-dark-mode --mute-audio"#
         );
 
-        assert_eq!(get_standalone_options_from_arguments(args), STANDALONE_EXAMPLE);
+        assert_eq!(
+            get_standalone_options_from_arguments(args),
+            r#"--profile-directory="Default" --disable-extensions --force-dark-mode --mute-audio"#
+        );
     }
 
     #[test]
-    fn non_ascii_arguments_do_not_break_tokenization() {
+    fn non_ascii_existing_arguments_do_not_affect_replacement() {
         let existing = r#"--profile-directory="Profilé 1" --enable-features="msUndersideButton""#;
 
         assert_eq!(
             merge_shortcut_arguments(existing, r#"--disable-features="MediaRouter""#),
-            r#"--profile-directory="Profilé 1" --disable-features="MediaRouter""#
+            r#"--disable-features="MediaRouter""#
         );
     }
 }

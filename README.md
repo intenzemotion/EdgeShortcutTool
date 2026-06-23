@@ -60,9 +60,9 @@ With **Hide sign-in red dot** checked:
 
 ### Restore default
 
-Removes Edge custom flags managed by this tool from supported shortcuts, including standalone switches and `--enable-features` / `--disable-features`.
+Removes entire Edge custom flags managed by this tool.
 
-Other shortcut options, such as profile options, are preserved.
+This includes standalone switches, `--enable-features` and `--disable-features`.
 
 ## Custom
 
@@ -98,7 +98,14 @@ The tool updates existing shortcuts named:
 Microsoft Edge.lnk
 ```
 
-The shortcut must exist in one of these supported locations:
+Or optionally:
+```text
+Microsoft Edge Beta.lnk
+Microsoft Edge Dev.lnk
+Microsoft Edge Canary.lnk
+```
+
+Microsoft Edge.lnk must exist in one of these common locations:
 
 ```text
 %Public%\Desktop\Microsoft Edge.lnk
