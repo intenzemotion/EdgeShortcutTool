@@ -8,9 +8,11 @@ use std::path::Path;
 use std::rc::Rc;
 
 use native_windows_gui as nwg;
-use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    HWND, LPARAM, POINT, RECT, WPARAM
+};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -18,11 +20,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetClassLongPtrW, SetWindowLongPtrW, SetWindowPos, GCLP_HICON, GCLP_HICONSM,
     GWL_EXSTYLE, ICON_BIG, ICON_SMALL, MF_BYCOMMAND, SC_MAXIMIZE, SC_MINIMIZE,
     SC_RESTORE, SC_SIZE, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, WM_SETICON, WS_EX_DLGMODALFRAME,
+    SWP_NOZORDER, WM_SETICON, WS_EX_DLGMODALFRAME
 };
 
 const APP_TITLE: &str = "Edge Shortcut Tool";
-const CUSTOM_WINDOW_CENTER_Y_OFFSET: i32 = -28;
+const CUSTOM_WINDOW_CENTER_Y_OFFSET: i32 = -3;
 
 const OLD_FEATURE: &str = "msFeatureGroupNewLookAndFeelHoldout";
 const NEW_FEATURE: &str = "msForceNoRoundedCornerAndMargin";
@@ -62,6 +64,10 @@ const HELP_TEXT: &str = concat!(
     "When checked, this also adds --disable-extensions.\r\n",
     "This starts Edge without loading browser extensions.\r\n",
     "\r\n",
+    "Target\r\n",
+    "Use the gear button to choose which shortcut names are updated.\r\n",
+    "Microsoft Edge is selected by default.\r\n",
+    "\r\n",
     "Custom\r\n",
     "Standalone example: --disable-extensions --force-dark-mode --mute-audio.\r\n",
     "Enable example: msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading.\r\n",
@@ -69,7 +75,7 @@ const HELP_TEXT: &str = concat!(
     "Applying custom flags replaces existing managed custom flags.\r\n",
     "\r\n",
     "Info\r\n",
-    "Displays executable candidates and supported shortcut locations.\r\n",
+    "Displays executable candidates and selected shortcut locations.\r\n",
     "Also shows which shortcuts were updated, missing, or failed.\r\n",
     "\r\n",
     "Reminder\r\n",
@@ -81,6 +87,7 @@ const HELP_TEXT: &str = concat!(
 struct App {
     window: nwg::Window,
 
+    button_shortcuts: nwg::Button,
     button_custom: nwg::Button,
     button_help: nwg::Button,
 
@@ -102,6 +109,15 @@ struct App {
     status_box: nwg::RichTextBox,
     button_info: nwg::Button,
     button_exit: nwg::Button,
+
+    shortcuts_window: nwg::Window,
+    label_shortcuts_description: nwg::Label,
+    check_shortcut_stable: nwg::CheckBox,
+    check_shortcut_beta: nwg::CheckBox,
+    check_shortcut_dev: nwg::CheckBox,
+    check_shortcut_canary: nwg::CheckBox,
+    button_shortcuts_ok: nwg::Button,
+    button_shortcuts_cancel: nwg::Button,
 
     custom_window: nwg::Window,
     label_standalone_flags: nwg::Label,
@@ -127,8 +143,10 @@ struct App {
     ui_font: nwg::Font,
     info_font: nwg::Font,
     detail_font: nwg::Font,
+    shortcut_button_font: nwg::Font,
     tooltip: nwg::Tooltip,
-    last_apply_result: RefCell<Option<shortcut::ApplyResult>>,
+    shortcut_selection: RefCell<shortcut::ShortcutTargetSelection>,
+    last_apply_result: RefCell<Option<shortcut::ApplyResult>>
 }
 
 impl App {
@@ -137,6 +155,7 @@ impl App {
 
         app.build_fonts()?;
         app.build_main_window()?;
+        app.build_shortcuts_window()?;
         app.build_custom_window()?;
         app.build_help_window()?;
         app.build_status_window()?;
@@ -168,6 +187,11 @@ impl App {
             .size_absolute(12)
             .build(&mut self.detail_font)?;
 
+        nwg::Font::builder()
+            .family("Segoe UI Symbol")
+            .size_absolute(14)
+            .build(&mut self.shortcut_button_font)?;
+
         Ok(())
     }
 
@@ -182,6 +206,7 @@ impl App {
         const RIGHT_EDGE: i32 = WINDOW_W - MARGIN;
         const HELP_X: i32 = RIGHT_EDGE - TOP_BUTTON_W;
         const CUSTOM_X: i32 = HELP_X - TOP_BUTTON_GAP - TOP_BUTTON_W;
+        const SHORTCUTS_X: i32 = CUSTOM_X - TOP_BUTTON_GAP - TOP_BUTTON_W;
 
         const PRESET_X: i32 = MARGIN;
         const PRESET_Y: i32 = 42;
@@ -192,7 +217,7 @@ impl App {
 
         const TITLE_X: i32 = 24;
         const TITLE_Y: i32 = 36;
-        const TITLE_W: i32 = 104;
+        const TITLE_W: i32 = 109;
         const TITLE_H: i32 = 20;
         const TITLE_RIGHT_X: i32 = TITLE_X + TITLE_W;
         const PRESET_LINE_TOP_LEFT_W: i32 = TITLE_X - PRESET_X - 1;
@@ -233,6 +258,14 @@ impl App {
             .position((400, 300))
             .title(APP_TITLE)
             .build(&mut self.window)?;
+
+        nwg::Button::builder()
+            .text("\u{2699}")
+            .position((SHORTCUTS_X, TOP_BUTTON_Y))
+            .size((TOP_BUTTON_W, TOP_BUTTON_H))
+            .font(Some(&self.shortcut_button_font))
+            .parent(&self.window)
+            .build(&mut self.button_shortcuts)?;
 
         nwg::Button::builder()
             .text("...")
@@ -389,6 +422,96 @@ impl App {
         Ok(())
     }
 
+    fn build_shortcuts_window(&mut self) -> Result<(), nwg::NwgError> {
+        const WINDOW_W: i32 = 310;
+
+        const MARGIN_X: i32 = 16;
+        const DESCRIPTION_Y: i32 = 16;
+        const DESCRIPTION_W: i32 = WINDOW_W - (MARGIN_X * 2);
+        const DESCRIPTION_H: i32 = 38;
+
+        const CHECK_X: i32 = MARGIN_X;
+        const CHECK_W: i32 = DESCRIPTION_W;
+        const CHECK_H: i32 = 22;
+        const CHECK_GAP: i32 = 4;
+        const CHECK_START_Y: i32 = DESCRIPTION_Y + DESCRIPTION_H + 8;
+        const STABLE_Y: i32 = CHECK_START_Y;
+        const BETA_Y: i32 = STABLE_Y + CHECK_H + CHECK_GAP;
+        const DEV_Y: i32 = BETA_Y + CHECK_H + CHECK_GAP;
+        const CANARY_Y: i32 = DEV_Y + CHECK_H + CHECK_GAP;
+
+        const BUTTON_W: i32 = 75;
+        const BUTTON_H: i32 = 26;
+        const BUTTON_GAP: i32 = 8;
+        const BUTTON_SECTION_GAP: i32 = 16;
+        const BUTTON_Y: i32 = CANARY_Y + CHECK_H + BUTTON_SECTION_GAP;
+        const BUTTON_CANCEL_X: i32 = WINDOW_W - MARGIN_X - BUTTON_W;
+        const BUTTON_OK_X: i32 = BUTTON_CANCEL_X - BUTTON_GAP - BUTTON_W;
+        const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;
+
+        nwg::Window::builder()
+            .flags(nwg::WindowFlags::WINDOW)
+            .size((WINDOW_W, WINDOW_H))
+            .position((430, 330))
+            .title("Target")
+            .build(&mut self.shortcuts_window)?;
+
+        nwg::Label::builder()
+            .text("Choose shortcut targets to update.\r\nBeta, Dev, and Canary are off by default.")
+            .position((MARGIN_X, DESCRIPTION_Y))
+            .size((DESCRIPTION_W, DESCRIPTION_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.label_shortcuts_description)?;
+
+        nwg::CheckBox::builder()
+            .text("Microsoft Edge")
+            .position((CHECK_X, STABLE_Y))
+            .size((CHECK_W, CHECK_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.check_shortcut_stable)?;
+
+        self.check_shortcut_stable.set_check_state(nwg::CheckBoxState::Checked);
+
+        nwg::CheckBox::builder()
+            .text("Microsoft Edge Beta")
+            .position((CHECK_X, BETA_Y))
+            .size((CHECK_W, CHECK_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.check_shortcut_beta)?;
+
+        nwg::CheckBox::builder()
+            .text("Microsoft Edge Dev")
+            .position((CHECK_X, DEV_Y))
+            .size((CHECK_W, CHECK_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.check_shortcut_dev)?;
+
+        nwg::CheckBox::builder()
+            .text("Microsoft Edge Canary")
+            .position((CHECK_X, CANARY_Y))
+            .size((CHECK_W, CHECK_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.check_shortcut_canary)?;
+
+        nwg::Button::builder()
+            .text("OK")
+            .position((BUTTON_OK_X, BUTTON_Y))
+            .size((BUTTON_W, BUTTON_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.button_shortcuts_ok)?;
+
+        nwg::Button::builder()
+            .text("Cancel")
+            .position((BUTTON_CANCEL_X, BUTTON_Y))
+            .size((BUTTON_W, BUTTON_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.button_shortcuts_cancel)?;
+
+        self.shortcuts_window.set_visible(false);
+
+        Ok(())
+    }
+
     fn build_custom_window(&mut self) -> Result<(), nwg::NwgError> {
         const WINDOW_W: i32 = 470;
 
@@ -495,7 +618,7 @@ impl App {
         const TEXT_X: i32 = MARGIN;
         const TEXT_Y: i32 = MARGIN;
         const TEXT_W: i32 = WINDOW_W - (MARGIN * 2);
-        const TEXT_H: i32 = 572;
+        const TEXT_H: i32 = 636;
         const BUTTON_X: i32 = TEXT_X + TEXT_W - BUTTON_W;
         const BUTTON_Y: i32 = TEXT_Y + TEXT_H + BUTTON_SECTION_GAP;
         const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;
@@ -531,7 +654,7 @@ impl App {
     }
 
     fn build_status_window(&mut self) -> Result<(), nwg::NwgError> {
-        const WINDOW_W: i32 = 750;
+        const WINDOW_W: i32 = 930;
 
         const MARGIN: i32 = 16;
         const BUTTON_SECTION_GAP: i32 = 14;
@@ -543,11 +666,11 @@ impl App {
 
         const EDGE_HEADER_Y: i32 = MARGIN;
         const EDGE_TEXT_Y: i32 = EDGE_HEADER_Y + HEADER_H + HEADER_TEXT_GAP;
-        const EDGE_TEXT_H: i32 = 236;
+        const EDGE_TEXT_H: i32 = 232;
 
         const SHORTCUT_HEADER_Y: i32 = EDGE_TEXT_Y + EDGE_TEXT_H + SECTION_GAP;
         const SHORTCUT_TEXT_Y: i32 = SHORTCUT_HEADER_Y + HEADER_H + HEADER_TEXT_GAP;
-        const SHORTCUT_TEXT_H: i32 = 328;
+        const SHORTCUT_TEXT_H: i32 = 382;
 
         const BUTTON_W: i32 = 75;
         const BUTTON_H: i32 = 26;
@@ -558,6 +681,7 @@ impl App {
         // Keep diagnostic sections scrollable when future output becomes longer.
         let info_text_flags = nwg::RichTextBoxFlags::VISIBLE
             | nwg::RichTextBoxFlags::SAVE_SELECTION
+            | nwg::RichTextBoxFlags::VSCROLL
             | nwg::RichTextBoxFlags::AUTOVSCROLL;
 
         nwg::Window::builder()
@@ -612,7 +736,8 @@ impl App {
 
         self.status_shortcut_text.set_background_color(COLOR_WINDOW);
 
-        let (edge_report, shortcut_report) = build_status_reports(None);
+        let selection = self.shortcut_selection.borrow();
+        let (edge_report, shortcut_report) = build_status_reports(&selection, None);
         self.status_edge_text.set_text(&edge_report);
         self.status_shortcut_text.set_text(&shortcut_report);
         set_rich_text_box_format_rect(&self.status_edge_text, 10, 8, 10, 8);
@@ -638,6 +763,7 @@ impl App {
         let disable_text = "Example: msShowSignInIndicator,msHubAppsSidebarRetirement,MediaRouter";
 
         nwg::Tooltip::builder()
+            .register(&self.button_shortcuts, "Target")
             .register(&self.button_custom, "Custom")
             .register(&self.button_help, "Help")
             .register(&self.button_info, "Info")
@@ -647,6 +773,10 @@ impl App {
             .register(&self.check_sign_in_indicator, "--disable-features=msShowSignInIndicator")
             .register(&self.check_restore_sidebar, "--disable-features=msHubAppsSidebarRetirement")
             .register(&self.check_disable_extensions, "--disable-extensions")
+            .register(&self.check_shortcut_stable, "Microsoft Edge.lnk")
+            .register(&self.check_shortcut_beta, "Microsoft Edge Beta.lnk")
+            .register(&self.check_shortcut_dev, "Microsoft Edge Dev.lnk")
+            .register(&self.check_shortcut_canary, "Microsoft Edge Canary.lnk")
             .register(&self.label_standalone_flags, standalone_text)
             .register(&self.text_standalone_flags, standalone_text)
             .register(&self.label_enable_features, enable_text)
@@ -663,6 +793,8 @@ impl App {
             nwg::Event::OnWindowClose => {
                 if handle == self.window.handle {
                     nwg::stop_thread_dispatch();
+                } else if handle == self.shortcuts_window.handle {
+                    self.close_shortcuts();
                 } else if handle == self.custom_window.handle {
                     self.close_custom_flags();
                 } else if handle == self.help_window.handle {
@@ -675,6 +807,8 @@ impl App {
             nwg::Event::OnButtonClick => {
                 if handle == self.button_exit.handle {
                     nwg::stop_thread_dispatch();
+                } else if handle == self.button_shortcuts.handle {
+                    self.show_shortcuts();
                 } else if handle == self.button_help.handle {
                     self.show_help();
                 } else if handle == self.button_info.handle {
@@ -687,6 +821,10 @@ impl App {
                     self.apply_new_workaround();
                 } else if handle == self.button_default.handle {
                     self.apply_options("", "Restore default");
+                } else if handle == self.button_shortcuts_ok.handle {
+                    self.save_shortcuts();
+                } else if handle == self.button_shortcuts_cancel.handle {
+                    self.close_shortcuts();
                 } else if handle == self.button_apply_custom.handle {
                     self.apply_custom_flags();
                 } else if handle == self.button_close_custom.handle {
@@ -712,6 +850,22 @@ impl App {
 
     fn disable_extensions_checked(&self) -> bool {
         self.check_disable_extensions.check_state() == nwg::CheckBoxState::Checked
+    }
+
+    fn shortcuts_selected(&self) -> shortcut::ShortcutTargetSelection {
+        shortcut::ShortcutTargetSelection {
+            stable: self.check_shortcut_stable.check_state() == nwg::CheckBoxState::Checked,
+            beta: self.check_shortcut_beta.check_state() == nwg::CheckBoxState::Checked,
+            dev: self.check_shortcut_dev.check_state() == nwg::CheckBoxState::Checked,
+            canary: self.check_shortcut_canary.check_state() == nwg::CheckBoxState::Checked
+        }
+    }
+
+    fn set_shortcuts_checked(&self, selection: &shortcut::ShortcutTargetSelection) {
+        self.check_shortcut_stable.set_check_state(check_box_state(selection.stable));
+        self.check_shortcut_beta.set_check_state(check_box_state(selection.beta));
+        self.check_shortcut_dev.set_check_state(check_box_state(selection.dev));
+        self.check_shortcut_canary.set_check_state(check_box_state(selection.canary));
     }
 
     fn get_standalone_options(&self) -> String {
@@ -793,9 +947,16 @@ impl App {
     }
 
     fn apply_options(&self, options: &str, mode_name: &str) {
+        let selection = self.shortcut_selection.borrow().clone();
+
+        if !selection.has_any() {
+            self.status_box.set_text("No shortcut selected");
+            return;
+        }
+
         self.status_box.set_text("Applying...");
 
-        let result = shortcut::apply_options(options);
+        let result = shortcut::apply_options(options, &selection);
 
         let status_message = if result.found_shortcuts == 0 {
             "No shortcuts found".to_string()
@@ -809,8 +970,33 @@ impl App {
         *self.last_apply_result.borrow_mut() = Some(result);
     }
 
+    fn show_shortcuts(&self) {
+        let selection = self.shortcut_selection.borrow();
+        self.set_shortcuts_checked(&selection);
+
+        set_window_enabled(&self.window, false);
+        center_window_on_cursor_monitor(&self.shortcuts_window);
+        self.shortcuts_window.set_visible(true);
+        self.shortcuts_window.set_focus();
+        self.check_shortcut_stable.set_focus();
+    }
+
+    fn save_shortcuts(&self) {
+        let selection = self.shortcuts_selected();
+
+        *self.shortcut_selection.borrow_mut() = selection;
+        self.close_shortcuts();
+    }
+
+    fn close_shortcuts(&self) {
+        self.shortcuts_window.set_visible(false);
+        set_window_enabled(&self.window, true);
+        self.window.set_focus();
+    }
+
     fn show_custom_flags(&self) {
-        let current_arguments = shortcut::get_current_shortcut_arguments();
+        let selection = self.shortcut_selection.borrow();
+        let current_arguments = shortcut::get_current_shortcut_arguments(&selection);
         let standalone_options = shortcut::get_standalone_options_from_arguments(&current_arguments);
         let enable_features = shortcut::get_feature_list_from_arguments(&current_arguments, "enable-features");
         let disable_features = shortcut::get_feature_list_from_arguments(&current_arguments, "disable-features");
@@ -848,8 +1034,9 @@ impl App {
 
     fn show_status_info(&self) {
         let (edge_report, shortcut_report) = {
+            let selection = self.shortcut_selection.borrow();
             let last_apply_result = self.last_apply_result.borrow();
-            build_status_reports(last_apply_result.as_ref())
+            build_status_reports(&selection, last_apply_result.as_ref())
         };
 
         // Temporarily unlock the boxes so their text can be refreshed.
@@ -889,8 +1076,9 @@ impl App {
             "Hide sign-in red dot",
             "Restore sidebar",
             "Disable extensions",
+            "Target",
             "Custom",
-            "Info",
+            "Info"
         ] {
             self.apply_all_help_text_format(title, nwg::CharEffects::BOLD, BLACK);
         }
@@ -928,7 +1116,7 @@ impl App {
             y_offset: None,
             text_color: Some(color),
             font_face_name: Some("Segoe UI".to_string()),
-            underline_type: None,
+            underline_type: None
         };
 
         self.help_text.set_char_format(&format);
@@ -936,6 +1124,7 @@ impl App {
 
     fn harden_window_chrome(&self) {
         harden_window_chrome(&self.window);
+        harden_window_chrome(&self.shortcuts_window);
         harden_window_chrome(&self.custom_window);
         harden_window_chrome(&self.help_window);
         harden_window_chrome(&self.status_window);
@@ -943,6 +1132,14 @@ impl App {
 
     fn center_main_window(&self) {
         center_window_on_cursor_monitor(&self.window);
+    }
+}
+
+fn check_box_state(checked: bool) -> nwg::CheckBoxState {
+    if checked {
+        nwg::CheckBoxState::Checked
+    } else {
+        nwg::CheckBoxState::Unchecked
     }
 }
 
@@ -971,23 +1168,25 @@ fn rich_edit_position(text: &str, byte_index: usize) -> u32 {
     position
 }
 
-fn build_status_reports(last_apply_result: Option<&shortcut::ApplyResult>) -> (String, String) {
+fn build_status_reports(selection: &shortcut::ShortcutTargetSelection, last_apply_result: Option<&shortcut::ApplyResult>) -> (String, String) {
     // Build each section separately so the Info window can size them independently.
     let mut edge_report = String::new();
     let candidates = shortcut::get_edge_executable_candidates();
     write_edge_candidate_section(&mut edge_report, &candidates);
 
     let mut shortcut_report = String::new();
-    write_shortcut_section(&mut shortcut_report, last_apply_result);
+    write_shortcut_section(&mut shortcut_report, selection, last_apply_result);
 
     (
         edge_report.replace('\n', "\r\n"),
-        shortcut_report.replace('\n', "\r\n"),
+        shortcut_report.replace('\n', "\r\n")
     )
 }
 
-fn write_shortcut_section(report: &mut String, last_apply_result: Option<&shortcut::ApplyResult>) {
+fn write_shortcut_section(report: &mut String, selection: &shortcut::ShortcutTargetSelection, last_apply_result: Option<&shortcut::ApplyResult>) {
     if let Some(result) = last_apply_result {
+        write_selected_shortcuts(report, &result.selected_shortcut_names);
+
         let updated = result
             .details
             .iter()
@@ -1015,10 +1214,13 @@ fn write_shortcut_section(report: &mut String, last_apply_result: Option<&shortc
             result.found_shortcuts, updated.len(), missing.len(), failed.len()
         );
     } else {
+        let selected_shortcuts = shortcut::selected_shortcut_display_names(selection);
+        write_selected_shortcuts(report, &selected_shortcuts);
+
         let mut found = Vec::new();
         let mut missing = Vec::new();
 
-        for path in shortcut::get_shortcut_paths() {
+        for path in shortcut::get_shortcut_paths(selection) {
             if path.exists() {
                 found.push(path);
             } else {
@@ -1050,13 +1252,23 @@ fn write_shortcut_section(report: &mut String, last_apply_result: Option<&shortc
     }
 }
 
+fn write_selected_shortcuts(report: &mut String, names: &[&str]) {
+    if names.is_empty() {
+        let _ = writeln!(report, "Selected: None");
+    } else {
+        let _ = writeln!(report, "Selected: {}", names.join(", "));
+    }
+
+    let _ = writeln!(report);
+}
+
 fn write_edge_candidate_section(report: &mut String, candidates: &[shortcut::EdgeExecutableCandidate]) {
     let selected = candidates.iter().find(|candidate| candidate.selected);
 
     let _ = writeln!(report, "Selected:");
 
     if let Some(candidate) = selected {
-        write_candidate_entry(report, candidate, "Selected");
+        write_candidate_entry(report, candidate, "");
     } else {
         let _ = writeln!(report, "  Not found in common install locations");
     }
@@ -1065,10 +1277,8 @@ fn write_edge_candidate_section(report: &mut String, candidates: &[shortcut::Edg
     let _ = writeln!(report, "Candidates:");
 
     for candidate in candidates {
-        let status = if candidate.selected {
-            "Selected"
-        } else if candidate.exists {
-            "Found"
+        let status = if candidate.exists {
+            "Exists"
         } else if candidate.path.is_some() {
             "Missing"
         } else {
@@ -1089,7 +1299,11 @@ fn write_candidate_entry(report: &mut String, candidate: &shortcut::EdgeExecutab
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "(environment variable not set)".to_string());
 
-    let _ = writeln!(report, "  {} - {}", status, candidate.source);
+    if status.is_empty() {
+        let _ = writeln!(report, "  {}", candidate.source);
+    } else {
+        let _ = writeln!(report, "  {} - {}", status, candidate.source);
+    }
     let _ = writeln!(report, "    {}", path_text);
 }
 
@@ -1125,11 +1339,11 @@ fn shortcut_location_label(path: &Path) -> &'static str {
         "Pinned Start Menu"
     } else if value.contains(r"\implicitappshortcuts\") {
         "Implicit pinned shortcut"
-    } else if value.contains(r"\internet explorer\quick launch\microsoft edge.lnk") {
+    } else if value.contains(r"\internet explorer\quick launch\") {
         "Quick Launch"
     } else if value.contains(r"\appdata\roaming\microsoft\windows\start menu\") {
         "Current user Start Menu"
-    } else if value.contains(r"\desktop\microsoft edge.lnk") {
+    } else if value.contains(r"\desktop\") {
         "Current user Desktop"
     } else {
         "Shortcut"
@@ -1164,7 +1378,7 @@ fn set_rich_text_box_format_rect(control: &nwg::RichTextBox, left: i32, top: i32
         left,
         top,
         right: width as i32 - right,
-        bottom: height as i32 - bottom,
+        bottom: height as i32 - bottom
     };
 
     // SAFETY: hwnd belongs to this RichTextBox, and rect lives for the
@@ -1174,7 +1388,7 @@ fn set_rich_text_box_format_rect(control: &nwg::RichTextBox, left: i32, top: i32
             hwnd,
             EM_SETRECT_MESSAGE,
             Some(WPARAM(0)),
-            Some(LPARAM((&rect as *const RECT) as isize)),
+            Some(LPARAM((&rect as *const RECT) as isize))
         );
     }
 }
@@ -1204,14 +1418,14 @@ fn harden_window_chrome(window: &nwg::Window) {
             hwnd,
             WM_SETICON,
             Some(WPARAM(ICON_SMALL as usize)),
-            Some(LPARAM(0)),
+            Some(LPARAM(0))
         );
 
         let _ = SendMessageW(
             hwnd,
             WM_SETICON,
             Some(WPARAM(ICON_BIG as usize)),
-            Some(LPARAM(0)),
+            Some(LPARAM(0))
         );
 
         let _ = SetClassLongPtrW(hwnd, GCLP_HICONSM, 0);
@@ -1221,7 +1435,7 @@ fn harden_window_chrome(window: &nwg::Window) {
         let _ = SetWindowLongPtrW(
             hwnd,
             GWL_EXSTYLE,
-            ex_style | WS_EX_DLGMODALFRAME.0 as isize,
+            ex_style | WS_EX_DLGMODALFRAME.0 as isize
         );
 
         let system_menu = GetSystemMenu(hwnd, false);
@@ -1245,7 +1459,7 @@ fn harden_window_chrome(window: &nwg::Window) {
                 | SWP_NOSIZE
                 | SWP_NOZORDER
                 | SWP_NOACTIVATE
-                | SWP_FRAMECHANGED,
+                | SWP_FRAMECHANGED
         );
     }
 }
@@ -1281,7 +1495,7 @@ fn center_window_on_cursor_monitor_with_offset(window: &nwg::Window, offset_x: i
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             rcMonitor: Default::default(),
             rcWork: Default::default(),
-            dwFlags: 0,
+            dwFlags: 0
         };
 
         if !GetMonitorInfoW(monitor, &mut monitor_info).as_bool() {
@@ -1304,7 +1518,7 @@ fn center_window_on_cursor_monitor_with_offset(window: &nwg::Window, offset_x: i
             y,
             0,
             0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
         );
     }
 }
@@ -1327,6 +1541,7 @@ fn bind_events(app: &Rc<App>) -> (
     nwg::EventHandler,
     nwg::EventHandler,
     nwg::EventHandler,
+    nwg::EventHandler
 ) {
     // Each top-level window has its own handler so child button clicks are captured.
     let main_handle = app.window.handle.clone();
@@ -1336,7 +1551,17 @@ fn bind_events(app: &Rc<App>) -> (
         &main_handle,
         move |event, _event_data, handle| {
             main_app.process_event(event, handle);
-        },
+        }
+    );
+
+    let shortcuts_handle = app.shortcuts_window.handle.clone();
+    let shortcuts_app = Rc::clone(app);
+
+    let shortcuts_events = nwg::full_bind_event_handler(
+        &shortcuts_handle,
+        move |event, _event_data, handle| {
+            shortcuts_app.process_event(event, handle);
+        }
     );
 
     let custom_handle = app.custom_window.handle.clone();
@@ -1346,7 +1571,7 @@ fn bind_events(app: &Rc<App>) -> (
         &custom_handle,
         move |event, _event_data, handle| {
             custom_app.process_event(event, handle);
-        },
+        }
     );
 
     let help_handle = app.help_window.handle.clone();
@@ -1356,7 +1581,7 @@ fn bind_events(app: &Rc<App>) -> (
         &help_handle,
         move |event, _event_data, handle| {
             help_app.process_event(event, handle);
-        },
+        }
     );
 
     let status_handle = app.status_window.handle.clone();
@@ -1366,10 +1591,10 @@ fn bind_events(app: &Rc<App>) -> (
         &status_handle,
         move |event, _event_data, handle| {
             status_app.process_event(event, handle);
-        },
+        }
     );
 
-    (main_events, custom_events, help_events, status_events)
+    (main_events, shortcuts_events, custom_events, help_events, status_events)
 }
 
 fn main() {

@@ -10,8 +10,8 @@ fn main() {
 
     res.set("ProductName", "Edge Shortcut Tool");
     res.set("FileDescription", "Edge Shortcut Tool");
-    res.set("ProductVersion", "1.3.0.0");
-    res.set("FileVersion", "1.3.0.0");
+    res.set("ProductVersion", "1.4.0.0");
+    res.set("FileVersion", "1.4.0.0");
 
     if Path::new("edge.ico").exists() {
         res.set_icon("edge.ico");

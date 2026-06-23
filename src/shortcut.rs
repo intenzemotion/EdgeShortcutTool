@@ -1,24 +1,108 @@
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
-
-use windows::core::{HSTRING, Interface, Result as WinResult};
-use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED, STGM,
+use std::path::{
+    Path, PathBuf
 };
-use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+
+use windows::core::{
+    HSTRING, Interface, Result as WinResult
+};
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM
+};
+use windows::Win32::UI::Shell::{
+    FOLDERID_Desktop, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath, ShellLink
+};
 
 const ARGUMENT_BUFFER_LEN: usize = 32_768;
-const EDGE_SHORTCUT_NAME: &str = "Microsoft Edge.lnk";
 const MANAGED_FEATURE_SWITCH_NAMES: [&str; 2] = ["--enable-features", "--disable-features"];
 const PRESERVED_SHORTCUT_SWITCH_NAMES: [&str; 5] = [
     "--profile-directory",
     "--profile-email",
     "--app-id",
     "--app",
-    "--user-data-dir",
+    "--user-data-dir"
 ];
+
+#[derive(Clone, Copy)]
+pub struct ShortcutTarget {
+    pub display_name: &'static str,
+    pub shortcut_name: &'static str
+}
+
+pub const SHORTCUT_TARGETS: [ShortcutTarget; 4] = [
+    ShortcutTarget {
+        display_name: "Microsoft Edge",
+        shortcut_name: "Microsoft Edge.lnk"
+    },
+    ShortcutTarget {
+        display_name: "Microsoft Edge Beta",
+        shortcut_name: "Microsoft Edge Beta.lnk"
+    },
+    ShortcutTarget {
+        display_name: "Microsoft Edge Dev",
+        shortcut_name: "Microsoft Edge Dev.lnk"
+    },
+    ShortcutTarget {
+        display_name: "Microsoft Edge Canary",
+        shortcut_name: "Microsoft Edge Canary.lnk"
+    }
+];
+
+#[derive(Clone)]
+pub struct ShortcutTargetSelection {
+    pub stable: bool,
+    pub beta: bool,
+    pub dev: bool,
+    pub canary: bool
+}
+
+impl Default for ShortcutTargetSelection {
+    fn default() -> Self {
+        Self {
+            stable: true,
+            beta: false,
+            dev: false,
+            canary: false
+        }
+    }
+}
+
+impl ShortcutTargetSelection {
+    pub fn selected_targets(&self) -> Vec<ShortcutTarget> {
+        let mut targets = Vec::new();
+
+        if self.stable {
+            targets.push(SHORTCUT_TARGETS[0]);
+        }
+
+        if self.beta {
+            targets.push(SHORTCUT_TARGETS[1]);
+        }
+
+        if self.dev {
+            targets.push(SHORTCUT_TARGETS[2]);
+        }
+
+        if self.canary {
+            targets.push(SHORTCUT_TARGETS[3]);
+        }
+
+        targets
+    }
+
+    pub fn has_any(&self) -> bool {
+        self.stable || self.beta || self.dev || self.canary
+    }
+}
+
+pub fn selected_shortcut_display_names(selection: &ShortcutTargetSelection) -> Vec<&'static str> {
+    selection
+        .selected_targets()
+        .into_iter()
+        .map(|target| target.display_name)
+        .collect()
+}
 
 pub struct ComApartment;
 
@@ -50,40 +134,47 @@ pub struct EdgeExecutableCandidate {
     pub source: &'static str,
     pub path: Option<PathBuf>,
     pub exists: bool,
-    pub selected: bool,
+    pub selected: bool
 }
 
 #[derive(Clone)]
 pub enum ShortcutApplyState {
     Updated,
     Failed,
-    IgnoredMissing,
+    IgnoredMissing
 }
 
 #[derive(Clone)]
 pub struct ShortcutApplyDetail {
     pub path: PathBuf,
-    pub state: ShortcutApplyState,
+    pub state: ShortcutApplyState
 }
 
 pub struct ApplyResult {
+    pub selected_shortcut_names: Vec<&'static str>,
     pub found_shortcuts: usize,
     pub updated: usize,
     pub failed: usize,
-    pub details: Vec<ShortcutApplyDetail>,
+    pub details: Vec<ShortcutApplyDetail>
 }
 
 pub fn get_edge_executable_candidates() -> Vec<EdgeExecutableCandidate> {
     // Used by the Info window only; existing shortcut target paths are preserved.
     let mut candidates = Vec::new();
 
-    for (source, variable_name) in [
-        ("ProgramFiles(x86)", "ProgramFiles(x86)"),
-        ("ProgramFiles", "ProgramFiles"),
-        ("LocalAppData", "LocalAppData"),
+    for (source, variable_name, relative_path) in [
+        ("Stable - ProgramFiles(x86)", "ProgramFiles(x86)", r"Microsoft\Edge\Application\msedge.exe"),
+        ("Stable - ProgramFiles", "ProgramFiles", r"Microsoft\Edge\Application\msedge.exe"),
+        ("Stable - LocalAppData", "LocalAppData", r"Microsoft\Edge\Application\msedge.exe"),
+        ("Beta - ProgramFiles(x86)", "ProgramFiles(x86)", r"Microsoft\Edge Beta\Application\msedge.exe"),
+        ("Beta - LocalAppData", "LocalAppData", r"Microsoft\Edge Beta\Application\msedge.exe"),
+        ("Dev - ProgramFiles(x86)", "ProgramFiles(x86)", r"Microsoft\Edge Dev\Application\msedge.exe"),
+        ("Dev - LocalAppData", "LocalAppData", r"Microsoft\Edge Dev\Application\msedge.exe"),
+        ("Canary - ProgramFiles(x86)", "ProgramFiles(x86)", r"Microsoft\Edge SxS\Application\msedge.exe"),
+        ("Canary - LocalAppData", "LocalAppData", r"Microsoft\Edge SxS\Application\msedge.exe")
     ] {
         let path = env::var_os(variable_name)
-            .map(|base| PathBuf::from(base).join(r"Microsoft\Edge\Application\msedge.exe"));
+            .map(|base| PathBuf::from(base).join(relative_path));
 
         let exists = path.as_ref().map(|path| path.exists()).unwrap_or(false);
 
@@ -91,7 +182,7 @@ pub fn get_edge_executable_candidates() -> Vec<EdgeExecutableCandidate> {
             source,
             path,
             exists,
-            selected: false,
+            selected: false
         });
     }
 
@@ -107,33 +198,45 @@ pub fn get_edge_executable_candidates() -> Vec<EdgeExecutableCandidate> {
     candidates
 }
 
-pub fn get_shortcut_paths() -> Vec<PathBuf> {
+pub fn get_shortcut_paths(selection: &ShortcutTargetSelection) -> Vec<PathBuf> {
     // Keep missing paths in the list so Info can show what was checked.
     let mut paths = Vec::new();
+    let targets = selection.selected_targets();
 
     if let Some(public) = env::var_os("Public") {
-        paths.push(PathBuf::from(public).join(r"Desktop\Microsoft Edge.lnk"));
+        let public = PathBuf::from(public);
+
+        for target in &targets {
+            paths.push(public.join("Desktop").join(target.shortcut_name));
+        }
     }
 
     if let Some(user_profile) = env::var_os("UserProfile") {
-        paths.push(PathBuf::from(user_profile).join(r"Desktop\Microsoft Edge.lnk"));
+        let user_profile = PathBuf::from(user_profile);
+
+        for target in &targets {
+            paths.push(user_profile.join("Desktop").join(target.shortcut_name));
+        }
     }
+
+    add_current_user_desktop_shortcuts(&mut paths, &targets);
 
     if let Some(program_data) = env::var_os("ProgramData") {
         let program_data = PathBuf::from(program_data);
 
-        paths.push(program_data.join(r"Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk"));
+        for target in &targets {
+            paths.push(program_data.join(r"Microsoft\Windows\Start Menu\Programs").join(target.shortcut_name));
+        }
     }
 
     if let Some(app_data) = env::var_os("AppData") {
         let app_data = PathBuf::from(app_data);
 
-        paths.push(app_data.join(r"Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk"));
-        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\Microsoft Edge.lnk"));
-        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\StartMenu\Microsoft Edge.lnk"));
-        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Microsoft Edge.lnk"));
+        add_roaming_shortcuts(&mut paths, &app_data, &targets);
+    }
 
-        add_implicit_edge_shortcuts(&mut paths, &app_data);
+    if let Some(system_profile_app_data) = get_system_profile_app_data() {
+        add_roaming_shortcuts(&mut paths, &system_profile_app_data, &targets);
     }
 
     paths.sort();
@@ -141,7 +244,63 @@ pub fn get_shortcut_paths() -> Vec<PathBuf> {
     paths
 }
 
-fn add_implicit_edge_shortcuts(paths: &mut Vec<PathBuf>, app_data: &Path) {
+fn add_current_user_desktop_shortcuts(paths: &mut Vec<PathBuf>, targets: &[ShortcutTarget]) {
+    if let Some(desktop) = get_current_user_desktop_path() {
+        for target in targets {
+            paths.push(desktop.join(target.shortcut_name));
+        }
+    }
+
+    for variable_name in ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"] {
+        let Some(one_drive) = env::var_os(variable_name) else {
+            continue;
+        };
+
+        let desktop = PathBuf::from(one_drive).join("Desktop");
+
+        for target in targets {
+            paths.push(desktop.join(target.shortcut_name));
+        }
+    }
+}
+
+fn get_current_user_desktop_path() -> Option<PathBuf> {
+    // Handles redirected desktops, including OneDrive Known Folder Move.
+    // SAFETY: SHGetKnownFolderPath returns a CoTaskMem-allocated PWSTR. The string
+    // is copied into a Rust String before the original pointer is freed.
+    unsafe {
+        let path = SHGetKnownFolderPath(&FOLDERID_Desktop, KF_FLAG_DEFAULT, None).ok()?;
+        let value = path.to_string().ok();
+
+        CoTaskMemFree(Some(path.as_ptr() as *const core::ffi::c_void));
+
+        value
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from)
+    }
+}
+
+fn get_system_profile_app_data() -> Option<PathBuf> {
+    let windows_root = env::var_os("SystemRoot").or_else(|| env::var_os("WinDir"))?;
+
+    Some(
+        PathBuf::from(windows_root)
+            .join(r"System32\config\systemprofile\AppData\Roaming")
+    )
+}
+
+fn add_roaming_shortcuts(paths: &mut Vec<PathBuf>, app_data: &Path, targets: &[ShortcutTarget]) {
+    for target in targets {
+        paths.push(app_data.join(r"Microsoft\Windows\Start Menu\Programs").join(target.shortcut_name));
+        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch").join(target.shortcut_name));
+        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\StartMenu").join(target.shortcut_name));
+        paths.push(app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar").join(target.shortcut_name));
+    }
+
+    add_implicit_edge_shortcuts(paths, app_data, targets);
+}
+
+fn add_implicit_edge_shortcuts(paths: &mut Vec<PathBuf>, app_data: &Path, targets: &[ShortcutTarget]) {
     // Some pinned shortcuts live inside hashed ImplicitAppShortcuts folders.
     let root = app_data.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts");
 
@@ -163,19 +322,19 @@ fn add_implicit_edge_shortcuts(paths: &mut Vec<PathBuf>, app_data: &Path) {
         for shortcut in shortcuts.flatten() {
             let shortcut_path = shortcut.path();
 
-            if is_edge_shortcut_file(&shortcut_path) {
+            if is_selected_edge_shortcut_file(&shortcut_path, targets) {
                 paths.push(shortcut_path);
             }
         }
     }
 }
 
-fn is_edge_shortcut_file(path: &Path) -> bool {
+fn is_selected_edge_shortcut_file(path: &Path, targets: &[ShortcutTarget]) -> bool {
     let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
         return false;
     };
 
-    file_name.eq_ignore_ascii_case(EDGE_SHORTCUT_NAME)
+    targets.iter().any(|target| file_name.eq_ignore_ascii_case(target.shortcut_name))
 }
 
 fn strip_optional_feature_switch(text: &str) -> &str {
@@ -374,7 +533,7 @@ pub fn merge_shortcut_arguments(existing_arguments: &str, managed_options: &str)
         (true, true) => String::new(),
         (true, false) => managed_options.to_string(),
         (false, true) => preserved,
-        (false, false) => format!("{} {}", preserved, managed_options),
+        (false, false) => format!("{} {}", preserved, managed_options)
     }
 }
 
@@ -640,8 +799,8 @@ fn read_shortcut_arguments(path: &Path) -> Option<String> {
     }
 }
 
-pub fn get_current_shortcut_arguments() -> String {
-    for path in get_shortcut_paths() {
+pub fn get_current_shortcut_arguments(selection: &ShortcutTargetSelection) -> String {
+    for path in get_shortcut_paths(selection) {
         if let Some(arguments) = read_shortcut_arguments(&path) {
             return arguments;
         }
@@ -680,20 +839,21 @@ fn update_shortcut_arguments(path: &Path, managed_options: &str) -> WinResult<()
     Ok(())
 }
 
-pub fn apply_options(options: &str) -> ApplyResult {
+pub fn apply_options(options: &str, selection: &ShortcutTargetSelection) -> ApplyResult {
     // Store per-shortcut results so the Info window can explain what happened.
     let mut result = ApplyResult {
+        selected_shortcut_names: selected_shortcut_display_names(selection),
         found_shortcuts: 0,
         updated: 0,
         failed: 0,
-        details: Vec::new(),
+        details: Vec::new()
     };
 
-    for shortcut_path in get_shortcut_paths() {
+    for shortcut_path in get_shortcut_paths(selection) {
         if !shortcut_path.exists() {
             result.details.push(ShortcutApplyDetail {
                 path: shortcut_path,
-                state: ShortcutApplyState::IgnoredMissing,
+                state: ShortcutApplyState::IgnoredMissing
             });
             continue;
         }
@@ -704,13 +864,13 @@ pub fn apply_options(options: &str) -> ApplyResult {
             result.updated += 1;
             result.details.push(ShortcutApplyDetail {
                 path: shortcut_path,
-                state: ShortcutApplyState::Updated,
+                state: ShortcutApplyState::Updated
             });
         } else {
             result.failed += 1;
             result.details.push(ShortcutApplyDetail {
                 path: shortcut_path,
-                state: ShortcutApplyState::Failed,
+                state: ShortcutApplyState::Failed
             });
         }
     }
@@ -745,7 +905,7 @@ mod tests {
         let options = get_custom_options_from_text(
             STANDALONE_EXAMPLE,
             "msForceNoRoundedCornerAndMargin, msUndersideButton, ParallelDownloading",
-            r#"--disable-features="msShowSignInIndicator,msUndersideButton,MediaRouter""#,
+            r#"--disable-features="msShowSignInIndicator,msUndersideButton,MediaRouter""#
         );
 
         let expected = format!(
