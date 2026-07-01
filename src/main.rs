@@ -42,40 +42,39 @@ const EM_SETRECT_MESSAGE: u32 = 0x00B3;
 const HELP_TEXT: &str = concat!(
     "Old workaround\r\n",
     "Uses msFeatureGroupNewLookAndFeelHoldout.\r\n",
-    "This is the older/broader method for removing Edge rounded corner look.\r\n",
+    "This is the older/broader method for removing rounded corner look.\r\n",
     "\r\n",
     "New workaround\r\n",
     "Uses msForceNoRoundedCornerAndMargin.\r\n",
     "This is the newer/more direct method for removing rounded corners and margins.\r\n",
     "\r\n",
     "Restore default\r\n",
-    "Clears all Edge shortcut command-line arguments for selected shortcuts.\r\n",
+    "Clears all command-line flags managed by this tool and restores normal launch behavior.\r\n",
     "\r\n",
     "Hide sign-in red dot\r\n",
     "When checked, this also disables msShowSignInIndicator.\r\n",
-    "This hides the red sign-in reminder dot on Edge profile icon.\r\n",
+    "This hides the red sign-in reminder dot on profile icon.\r\n",
     "\r\n",
     "Restore sidebar\r\n",
     "When checked, this also disables msHubAppsSidebarRetirement.\r\n",
-    "This attempts to restore the classic Edge sidebar app list.\r\n",
+    "This attempts to restore the classic sidebar app list.\r\n",
     "\r\n",
     "Disable extensions\r\n",
     "When checked, this also adds --disable-extensions.\r\n",
     "This starts Edge without loading browser extensions.\r\n",
     "\r\n",
-    "Target\r\n",
-    "Use the gear button to choose which shortcut names are updated.\r\n",
-    "Microsoft Edge is selected by default.\r\n",
+    "Advanced\r\n",
+    "Choose which shortcut names are updated.\r\n",
+    "You can also apply flags when Edge is opened by another app such as Discord or Teams.\r\n",
     "\r\n",
     "Custom\r\n",
-    "Standalone example: --disable-extensions --force-dark-mode --mute-audio.\r\n",
-    "Enable example: msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading.\r\n",
-    "Disable example: msShowSignInIndicator,msHubAppsSidebarRetirement,MediaRouter.\r\n",
-    "Applying custom flags replaces full shortcut argument string.\r\n",
+    "Standalone example: --disable-extensions --force-dark-mode --mute-audio\r\n",
+    "Enable example: msForceNoRoundedCornerAndMargin,msUndersideButton,ParallelDownloading\r\n",
+    "Disable example: msShowSignInIndicator,msHubAppsSidebarRetirement,MediaRouter\r\n",
     "\r\n",
     "Info\r\n",
     "Displays executable candidates and selected shortcut locations.\r\n",
-    "Also shows which shortcuts were updated, missing, or failed.\r\n",
+    "For reference and diagnostic purposes only.\r\n",
     "\r\n",
     "Reminder\r\n",
     "Disable Startup Boost in Edge first. Copy and paste this into Edge address bar: ",
@@ -110,11 +109,25 @@ struct App {
     button_exit: nwg::Button,
 
     shortcuts_window: nwg::Window,
+    shortcut_target_line_top_left: nwg::RichLabel,
+    shortcut_target_line_top_right: nwg::RichLabel,
+    shortcut_target_line_left: nwg::RichLabel,
+    shortcut_target_line_right: nwg::RichLabel,
+    shortcut_target_line_bottom: nwg::RichLabel,
+    label_shortcuts_title: nwg::RichLabel,
     label_shortcuts_description: nwg::Label,
+    external_links_line_top_left: nwg::RichLabel,
+    external_links_line_top_right: nwg::RichLabel,
+    external_links_line_left: nwg::RichLabel,
+    external_links_line_right: nwg::RichLabel,
+    external_links_line_bottom: nwg::RichLabel,
+    label_external_links_title: nwg::RichLabel,
+    label_external_links_description: nwg::Label,
     check_shortcut_stable: nwg::CheckBox,
     check_shortcut_beta: nwg::CheckBox,
     check_shortcut_dev: nwg::CheckBox,
     check_shortcut_canary: nwg::CheckBox,
+    check_external_links: nwg::CheckBox,
     button_shortcuts_ok: nwg::Button,
     button_shortcuts_cancel: nwg::Button,
 
@@ -145,6 +158,7 @@ struct App {
     shortcut_button_font: nwg::Font,
     tooltip: nwg::Tooltip,
     shortcut_selection: RefCell<shortcut::ShortcutTargetSelection>,
+    apply_external_links: RefCell<bool>,
     last_apply_result: RefCell<Option<shortcut::ApplyResult>>
 }
 
@@ -157,6 +171,7 @@ impl App {
         app.build_shortcuts_window()?;
         app.build_custom_window()?;
         app.build_help_window()?;
+        app.load_settings();
         app.build_status_window()?;
         app.build_tooltips()?;
         app.style_help_text();
@@ -187,8 +202,8 @@ impl App {
             .build(&mut self.detail_font)?;
 
         nwg::Font::builder()
-            .family("Segoe UI Symbol")
-            .size_absolute(14)
+            .family("Segoe UI")
+            .size_absolute(13)
             .build(&mut self.shortcut_button_font)?;
 
         Ok(())
@@ -259,7 +274,7 @@ impl App {
             .build(&mut self.window)?;
 
         nwg::Button::builder()
-            .text("\u{2699}")
+            .text("\u{25A6}")
             .position((SHORTCUTS_X, TOP_BUTTON_Y))
             .size((TOP_BUTTON_W, TOP_BUTTON_H))
             .font(Some(&self.shortcut_button_font))
@@ -422,28 +437,58 @@ impl App {
     }
 
     fn build_shortcuts_window(&mut self) -> Result<(), nwg::NwgError> {
-        const WINDOW_W: i32 = 310;
+        const WINDOW_W: i32 = 400;
 
         const MARGIN_X: i32 = 16;
-        const DESCRIPTION_Y: i32 = 16;
-        const DESCRIPTION_W: i32 = WINDOW_W - (MARGIN_X * 2);
-        const DESCRIPTION_H: i32 = 38;
+        const SECTION_X: i32 = MARGIN_X;
+        const SECTION_W: i32 = WINDOW_W - (MARGIN_X * 2);
+        const SECTION_RIGHT_X: i32 = SECTION_X + SECTION_W;
+        const SECTION_TITLE_X: i32 = SECTION_X + 10;
+        const SECTION_TITLE_Y_OFFSET: i32 = -7;
+        const SECTION_TITLE_H: i32 = 20;
+        const SECTION_CONTENT_X: i32 = SECTION_X + 12;
+        const SECTION_CONTENT_W: i32 = SECTION_W - 24;
 
-        const CHECK_X: i32 = MARGIN_X;
-        const CHECK_W: i32 = DESCRIPTION_W;
+        const TARGET_SECTION_Y: i32 = 20;
+        const TARGET_SECTION_H: i32 = 158;
+        const TARGET_SECTION_BOTTOM_Y: i32 = TARGET_SECTION_Y + TARGET_SECTION_H - 1;
+        const TARGET_TITLE_Y: i32 = TARGET_SECTION_Y + SECTION_TITLE_Y_OFFSET;
+        const TARGET_TITLE_W: i32 = 88;
+        const TARGET_TITLE_RIGHT_X: i32 = SECTION_TITLE_X + TARGET_TITLE_W;
+        const TARGET_LINE_TOP_LEFT_W: i32 = SECTION_TITLE_X - SECTION_X - 1;
+        const TARGET_LINE_TOP_RIGHT_W: i32 = SECTION_RIGHT_X - TARGET_TITLE_RIGHT_X;
+
+        const DESCRIPTION_H: i32 = 20;
+        const TARGET_DESCRIPTION_Y: i32 = TARGET_SECTION_Y + 22;
+
+        const CHECK_X: i32 = SECTION_CONTENT_X;
+        const CHECK_W: i32 = SECTION_CONTENT_W;
         const CHECK_H: i32 = 22;
         const CHECK_GAP: i32 = 4;
-        const CHECK_START_Y: i32 = DESCRIPTION_Y + DESCRIPTION_H + 8;
+        const CHECK_START_Y: i32 = TARGET_DESCRIPTION_Y + DESCRIPTION_H + 6;
         const STABLE_Y: i32 = CHECK_START_Y;
         const BETA_Y: i32 = STABLE_Y + CHECK_H + CHECK_GAP;
         const DEV_Y: i32 = BETA_Y + CHECK_H + CHECK_GAP;
         const CANARY_Y: i32 = DEV_Y + CHECK_H + CHECK_GAP;
 
+        const EXTERNAL_SECTION_GAP: i32 = 12;
+        const EXTERNAL_SECTION_Y: i32 = TARGET_SECTION_Y + TARGET_SECTION_H + EXTERNAL_SECTION_GAP;
+        const EXTERNAL_SECTION_H: i32 = 96;
+        const EXTERNAL_SECTION_BOTTOM_Y: i32 = EXTERNAL_SECTION_Y + EXTERNAL_SECTION_H - 1;
+        const EXTERNAL_TITLE_Y: i32 = EXTERNAL_SECTION_Y + SECTION_TITLE_Y_OFFSET;
+        const EXTERNAL_TITLE_W: i32 = 73;
+        const EXTERNAL_TITLE_RIGHT_X: i32 = SECTION_TITLE_X + EXTERNAL_TITLE_W;
+        const EXTERNAL_LINE_TOP_LEFT_W: i32 = SECTION_TITLE_X - SECTION_X - 1;
+        const EXTERNAL_LINE_TOP_RIGHT_W: i32 = SECTION_RIGHT_X - EXTERNAL_TITLE_RIGHT_X;
+        const EXTERNAL_DESCRIPTION_Y: i32 = EXTERNAL_SECTION_Y + 22;
+        const EXTERNAL_DESCRIPTION_H: i32 = 40;
+        const EXTERNAL_CHECK_Y: i32 = EXTERNAL_DESCRIPTION_Y + EXTERNAL_DESCRIPTION_H + 2;
+
         const BUTTON_W: i32 = 75;
         const BUTTON_H: i32 = 26;
         const BUTTON_GAP: i32 = 8;
-        const BUTTON_SECTION_GAP: i32 = 16;
-        const BUTTON_Y: i32 = CANARY_Y + CHECK_H + BUTTON_SECTION_GAP;
+        const BUTTON_SECTION_GAP: i32 = 14;
+        const BUTTON_Y: i32 = EXTERNAL_SECTION_Y + EXTERNAL_SECTION_H + BUTTON_SECTION_GAP;
         const BUTTON_CANCEL_X: i32 = WINDOW_W - MARGIN_X - BUTTON_W;
         const BUTTON_OK_X: i32 = BUTTON_CANCEL_X - BUTTON_GAP - BUTTON_W;
         const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;
@@ -452,13 +497,68 @@ impl App {
             .flags(nwg::WindowFlags::WINDOW)
             .size((WINDOW_W, WINDOW_H))
             .position((430, 330))
-            .title("Target")
+            .title("Advanced")
             .build(&mut self.shortcuts_window)?;
 
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_X, TARGET_SECTION_Y))
+            .size((TARGET_LINE_TOP_LEFT_W, 1))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.shortcut_target_line_top_left)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((TARGET_TITLE_RIGHT_X, TARGET_SECTION_Y))
+            .size((TARGET_LINE_TOP_RIGHT_W, 1))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.shortcut_target_line_top_right)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_X, TARGET_SECTION_Y))
+            .size((1, TARGET_SECTION_H))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.shortcut_target_line_left)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_RIGHT_X - 1, TARGET_SECTION_Y))
+            .size((1, TARGET_SECTION_H))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.shortcut_target_line_right)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_X, TARGET_SECTION_BOTTOM_Y))
+            .size((SECTION_W, 1))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.shortcut_target_line_bottom)?;
+
+        nwg::RichLabel::builder()
+            .text("Shortcut targets")
+            .position((SECTION_TITLE_X, TARGET_TITLE_Y))
+            .size((TARGET_TITLE_W, SECTION_TITLE_H))
+            .font(Some(&self.ui_font))
+            .background_color(Some(COLOR_CONTROL))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.label_shortcuts_title)?;
+
         nwg::Label::builder()
-            .text("Choose shortcut targets to update.\r\nBeta, Dev, and Canary are off by default.")
-            .position((MARGIN_X, DESCRIPTION_Y))
-            .size((DESCRIPTION_W, DESCRIPTION_H))
+            .text("Choose which shortcut names are updated.")
+            .position((SECTION_CONTENT_X, TARGET_DESCRIPTION_Y))
+            .size((SECTION_CONTENT_W, DESCRIPTION_H))
             .parent(&self.shortcuts_window)
             .build(&mut self.label_shortcuts_description)?;
 
@@ -468,8 +568,6 @@ impl App {
             .size((CHECK_W, CHECK_H))
             .parent(&self.shortcuts_window)
             .build(&mut self.check_shortcut_stable)?;
-
-        self.check_shortcut_stable.set_check_state(nwg::CheckBoxState::Checked);
 
         nwg::CheckBox::builder()
             .text("Microsoft Edge Beta")
@@ -491,6 +589,75 @@ impl App {
             .size((CHECK_W, CHECK_H))
             .parent(&self.shortcuts_window)
             .build(&mut self.check_shortcut_canary)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_X, EXTERNAL_SECTION_Y))
+            .size((EXTERNAL_LINE_TOP_LEFT_W, 1))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.external_links_line_top_left)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((EXTERNAL_TITLE_RIGHT_X, EXTERNAL_SECTION_Y))
+            .size((EXTERNAL_LINE_TOP_RIGHT_W, 1))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.external_links_line_top_right)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_X, EXTERNAL_SECTION_Y))
+            .size((1, EXTERNAL_SECTION_H))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.external_links_line_left)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_RIGHT_X - 1, EXTERNAL_SECTION_Y))
+            .size((1, EXTERNAL_SECTION_H))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.external_links_line_right)?;
+
+        nwg::RichLabel::builder()
+            .text("")
+            .position((SECTION_X, EXTERNAL_SECTION_BOTTOM_Y))
+            .size((SECTION_W, 1))
+            .background_color(Some(COLOR_GROUP_LINE))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.external_links_line_bottom)?;
+
+        nwg::RichLabel::builder()
+            .text("External links")
+            .position((SECTION_TITLE_X, EXTERNAL_TITLE_Y))
+            .size((EXTERNAL_TITLE_W, SECTION_TITLE_H))
+            .font(Some(&self.ui_font))
+            .background_color(Some(COLOR_CONTROL))
+            .flags(nwg::RichLabelFlags::VISIBLE)
+            .parent(&self.shortcuts_window)
+            .build(&mut self.label_external_links_title)?;
+
+        nwg::Label::builder()
+            .text("Use the same flags when Edge is opened by another app.\r\nSuch as Discord, Teams, Terminal.")
+            .position((SECTION_CONTENT_X, EXTERNAL_DESCRIPTION_Y))
+            .size((SECTION_CONTENT_W, EXTERNAL_DESCRIPTION_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.label_external_links_description)?;
+
+        nwg::CheckBox::builder()
+            .text("Apply to external links")
+            .position((CHECK_X, EXTERNAL_CHECK_Y))
+            .size((CHECK_W, CHECK_H))
+            .parent(&self.shortcuts_window)
+            .build(&mut self.check_external_links)?;
 
         nwg::Button::builder()
             .text("OK")
@@ -617,7 +784,7 @@ impl App {
         const TEXT_X: i32 = MARGIN;
         const TEXT_Y: i32 = MARGIN;
         const TEXT_W: i32 = WINDOW_W - (MARGIN * 2);
-        const TEXT_H: i32 = 625;
+        const TEXT_H: i32 = 610;
         const BUTTON_X: i32 = TEXT_X + TEXT_W - BUTTON_W;
         const BUTTON_Y: i32 = TEXT_Y + TEXT_H + BUTTON_SECTION_GAP;
         const WINDOW_H: i32 = BUTTON_Y + BUTTON_H + BUTTON_SECTION_GAP;
@@ -762,7 +929,7 @@ impl App {
         let disable_text = "Example: msShowSignInIndicator,msHubAppsSidebarRetirement,MediaRouter";
 
         nwg::Tooltip::builder()
-            .register(&self.button_shortcuts, "Target")
+            .register(&self.button_shortcuts, "Advanced")
             .register(&self.button_custom, "Custom")
             .register(&self.button_help, "Help")
             .register(&self.button_info, "Info")
@@ -772,6 +939,7 @@ impl App {
             .register(&self.check_sign_in_indicator, "--disable-features=msShowSignInIndicator")
             .register(&self.check_restore_sidebar, "--disable-features=msHubAppsSidebarRetirement")
             .register(&self.check_disable_extensions, "--disable-extensions")
+            .register(&self.check_external_links, "Apply flags when Edge is opened by other apps")
             .register(&self.check_shortcut_stable, "Microsoft Edge.lnk")
             .register(&self.check_shortcut_beta, "Microsoft Edge Beta.lnk")
             .register(&self.check_shortcut_dev, "Microsoft Edge Dev.lnk")
@@ -785,6 +953,30 @@ impl App {
             .build(&mut self.tooltip)?;
 
         Ok(())
+    }
+
+    fn load_settings(&self) {
+        let settings = shortcut::load_app_settings();
+
+        self.check_sign_in_indicator.set_check_state(check_box_state(settings.hide_sign_in_indicator));
+        self.check_restore_sidebar.set_check_state(check_box_state(settings.restore_sidebar));
+        self.check_disable_extensions.set_check_state(check_box_state(settings.disable_extensions));
+        self.check_external_links.set_check_state(check_box_state(settings.apply_external_links));
+        self.set_shortcuts_checked(&settings.shortcut_selection);
+        *self.shortcut_selection.borrow_mut() = settings.shortcut_selection;
+        *self.apply_external_links.borrow_mut() = settings.apply_external_links;
+    }
+
+    fn save_settings(&self) {
+        let settings = shortcut::AppSettings {
+            hide_sign_in_indicator: self.hide_sign_in_indicator_checked(),
+            restore_sidebar: self.restore_sidebar_checked(),
+            disable_extensions: self.disable_extensions_checked(),
+            apply_external_links: self.apply_external_links_checked(),
+            shortcut_selection: self.shortcut_selection.borrow().clone()
+        };
+
+        shortcut::save_app_settings(&settings);
     }
 
     fn process_event(&self, event: nwg::Event, handle: nwg::ControlHandle) {
@@ -849,6 +1041,10 @@ impl App {
 
     fn disable_extensions_checked(&self) -> bool {
         self.check_disable_extensions.check_state() == nwg::CheckBoxState::Checked
+    }
+
+    fn apply_external_links_checked(&self) -> bool {
+        *self.apply_external_links.borrow()
     }
 
     fn shortcuts_selected(&self) -> shortcut::ShortcutTargetSelection {
@@ -947,19 +1143,18 @@ impl App {
 
     fn apply_options(&self, options: &str, mode_name: &str) {
         let selection = self.shortcut_selection.borrow().clone();
-
-        if !selection.has_any() {
-            self.status_box.set_text("No shortcut selected");
-            return;
-        }
+        let apply_external_links = self.apply_external_links_checked();
 
         self.status_box.set_text("Applying...");
 
-        let result = shortcut::apply_options(options, &selection);
+        let result = shortcut::apply_options(options, &selection, apply_external_links);
+        let external_failed = result
+            .external_links
+            .as_ref()
+            .map(|external| matches!(&external.state, shortcut::ExternalLinkApplyState::Failed))
+            .unwrap_or(false);
 
-        let status_message = if result.found_shortcuts == 0 {
-            "No shortcuts found".to_string()
-        } else if result.failed > 0 {
+        let status_message = if result.failed > 0 || external_failed {
             "Completed with errors".to_string()
         } else {
             format!("Applied: {}", mode_name)
@@ -967,11 +1162,13 @@ impl App {
 
         self.status_box.set_text(&status_message);
         *self.last_apply_result.borrow_mut() = Some(result);
+        self.save_settings();
     }
 
     fn show_shortcuts(&self) {
         let selection = self.shortcut_selection.borrow();
         self.set_shortcuts_checked(&selection);
+        self.check_external_links.set_check_state(check_box_state(*self.apply_external_links.borrow()));
 
         set_window_enabled(&self.window, false);
         center_window_on_cursor_monitor(&self.shortcuts_window);
@@ -982,8 +1179,11 @@ impl App {
 
     fn save_shortcuts(&self) {
         let selection = self.shortcuts_selected();
+        let apply_external_links = self.check_external_links.check_state() == nwg::CheckBoxState::Checked;
 
         *self.shortcut_selection.borrow_mut() = selection;
+        *self.apply_external_links.borrow_mut() = apply_external_links;
+        self.save_settings();
         self.close_shortcuts();
     }
 
@@ -1075,7 +1275,7 @@ impl App {
             "Hide sign-in red dot",
             "Restore sidebar",
             "Disable extensions",
-            "Target",
+            "Advanced",
             "Custom",
             "Info"
         ] {
@@ -1208,6 +1408,9 @@ fn write_shortcut_section(report: &mut String, selection: &shortcut::ShortcutTar
         write_shortcut_group(report, "Failed", &failed);
         write_shortcut_group(report, "Missing", &missing);
 
+        write_external_link_section(report);
+
+        let _ = writeln!(report);
         let _ = writeln!(
             report, "Latest summary: {} found, {} updated, {} missing, {} failed",
             result.found_shortcuts, updated.len(), missing.len(), failed.len()
@@ -1247,7 +1450,50 @@ fn write_shortcut_section(report: &mut String, selection: &shortcut::ShortcutTar
             let _ = writeln!(report);
         }
 
+        write_external_link_section(report);
+
+        let _ = writeln!(report);
         let _ = writeln!(report, "No operation has run during this session.");
+    }
+}
+
+fn write_external_link_section(report: &mut String) {
+    let _ = writeln!(report, "Registry:");
+    let _ = writeln!(report, "  External links:");
+    let _ = writeln!(report, "    [{}]", shortcut::external_link_command_registry_key());
+
+    if let Some(command) = shortcut::get_current_user_external_link_command() {
+        write_external_link_command(report, &command);
+    } else {
+        let _ = writeln!(report, "    None applied");
+    }
+}
+
+fn write_external_link_command(report: &mut String, command: &str) {
+    if let Some((program, arguments)) = command.split_once("\" --") {
+        let _ = writeln!(report, "    {}\"", program);
+        write_external_link_arguments(report, &format!("--{}", arguments));
+    } else {
+        let _ = writeln!(report, "    {}", command);
+    }
+}
+
+fn write_external_link_arguments(report: &mut String, arguments: &str) {
+    let mut first = true;
+
+    for part in arguments.split(" --") {
+        let part = part.trim();
+
+        if part.is_empty() {
+            continue;
+        }
+
+        if first {
+            let _ = writeln!(report, "    {}", part);
+            first = false;
+        } else {
+            let _ = writeln!(report, "    --{}", part);
+        }
     }
 }
 

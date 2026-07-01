@@ -3,6 +3,10 @@ use std::fs;
 use std::path::{
     Path, PathBuf
 };
+use std::process::{
+    Command, Output
+};
+use std::os::windows::process::CommandExt;
 
 use windows::core::{
     HSTRING, Interface, Result as WinResult
@@ -15,7 +19,23 @@ use windows::Win32::UI::Shell::{
 };
 
 const ARGUMENT_BUFFER_LEN: usize = 32_768;
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 const MANAGED_FEATURE_SWITCH_NAMES: [&str; 2] = ["--enable-features", "--disable-features"];
+const APP_REGISTRY_KEY: &str = r"HKCU\Software\EdgeShortcutTool";
+const EXTERNAL_LINK_COMMAND_KEY_HKCU: &str = r"HKCU\Software\Classes\MSEdgeHTM\shell\open\command";
+const EXTERNAL_LINK_COMMAND_KEY_HKLM: &str = r"HKLM\Software\Classes\MSEdgeHTM\shell\open\command";
+const EXTERNAL_LINK_ARGUMENT_SUFFIX: &str = "--single-argument %1";
+const EXTERNAL_ORIGINAL_COMMAND_VALUE: &str = "ExternalOriginalCommand";
+const EXTERNAL_ORIGINAL_COMMAND_SAVED_VALUE: &str = "ExternalOriginalCommandSaved";
+const EXTERNAL_LAST_COMMAND_VALUE: &str = "ExternalLastCommand";
+const SETTING_HIDE_SIGN_IN_INDICATOR: &str = "HideSignInIndicator";
+const SETTING_RESTORE_SIDEBAR: &str = "RestoreSidebar";
+const SETTING_DISABLE_EXTENSIONS: &str = "DisableExtensions";
+const SETTING_APPLY_EXTERNAL_LINKS: &str = "ApplyExternalLinks";
+const SETTING_SHORTCUT_STABLE: &str = "ShortcutStable";
+const SETTING_SHORTCUT_BETA: &str = "ShortcutBeta";
+const SETTING_SHORTCUT_DEV: &str = "ShortcutDev";
+const SETTING_SHORTCUT_CANARY: &str = "ShortcutCanary";
 
 #[derive(Clone, Copy)]
 pub struct ShortcutTarget {
@@ -84,8 +104,47 @@ impl ShortcutTargetSelection {
         targets
     }
 
-    pub fn has_any(&self) -> bool {
-        self.stable || self.beta || self.dev || self.canary
+    pub fn unselected_targets(&self) -> Vec<ShortcutTarget> {
+        let mut targets = Vec::new();
+
+        if !self.stable {
+            targets.push(SHORTCUT_TARGETS[0]);
+        }
+
+        if !self.beta {
+            targets.push(SHORTCUT_TARGETS[1]);
+        }
+
+        if !self.dev {
+            targets.push(SHORTCUT_TARGETS[2]);
+        }
+
+        if !self.canary {
+            targets.push(SHORTCUT_TARGETS[3]);
+        }
+
+        targets
+    }
+}
+
+#[derive(Clone)]
+pub struct AppSettings {
+    pub hide_sign_in_indicator: bool,
+    pub restore_sidebar: bool,
+    pub disable_extensions: bool,
+    pub apply_external_links: bool,
+    pub shortcut_selection: ShortcutTargetSelection
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            hide_sign_in_indicator: true,
+            restore_sidebar: false,
+            disable_extensions: false,
+            apply_external_links: false,
+            shortcut_selection: ShortcutTargetSelection::default()
+        }
     }
 }
 
@@ -143,12 +202,24 @@ pub struct ShortcutApplyDetail {
     pub state: ShortcutApplyState
 }
 
+#[derive(Clone)]
+pub enum ExternalLinkApplyState {
+    Updated,
+    Restored,
+    Failed
+}
+
+#[derive(Clone)]
+pub struct ExternalLinkApplyResult {
+    pub state: ExternalLinkApplyState
+}
+
 pub struct ApplyResult {
     pub selected_shortcut_names: Vec<&'static str>,
     pub found_shortcuts: usize,
-    pub updated: usize,
     pub failed: usize,
-    pub details: Vec<ShortcutApplyDetail>
+    pub details: Vec<ShortcutApplyDetail>,
+    pub external_links: Option<ExternalLinkApplyResult>
 }
 
 pub fn get_edge_executable_candidates() -> Vec<EdgeExecutableCandidate> {
@@ -191,14 +262,21 @@ pub fn get_edge_executable_candidates() -> Vec<EdgeExecutableCandidate> {
 }
 
 pub fn get_shortcut_paths(selection: &ShortcutTargetSelection) -> Vec<PathBuf> {
-    // Keep missing paths in the list so Info can show what was checked.
+    // Keep missing selected paths in the list so Info can show what was checked.
+    get_shortcut_paths_for_targets(&selection.selected_targets())
+}
+
+fn get_unselected_shortcut_paths(selection: &ShortcutTargetSelection) -> Vec<PathBuf> {
+    get_shortcut_paths_for_targets(&selection.unselected_targets())
+}
+
+fn get_shortcut_paths_for_targets(targets: &[ShortcutTarget]) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    let targets = selection.selected_targets();
 
     if let Some(public) = env::var_os("Public") {
         let public = PathBuf::from(public);
 
-        for target in &targets {
+        for target in targets {
             paths.push(public.join("Desktop").join(target.shortcut_name));
         }
     }
@@ -206,17 +284,17 @@ pub fn get_shortcut_paths(selection: &ShortcutTargetSelection) -> Vec<PathBuf> {
     if let Some(user_profile) = env::var_os("UserProfile") {
         let user_profile = PathBuf::from(user_profile);
 
-        for target in &targets {
+        for target in targets {
             paths.push(user_profile.join("Desktop").join(target.shortcut_name));
         }
     }
 
-    add_current_user_desktop_shortcuts(&mut paths, &targets);
+    add_current_user_desktop_shortcuts(&mut paths, targets);
 
     if let Some(program_data) = env::var_os("ProgramData") {
         let program_data = PathBuf::from(program_data);
 
-        for target in &targets {
+        for target in targets {
             paths.push(program_data.join(r"Microsoft\Windows\Start Menu\Programs").join(target.shortcut_name));
         }
     }
@@ -224,11 +302,11 @@ pub fn get_shortcut_paths(selection: &ShortcutTargetSelection) -> Vec<PathBuf> {
     if let Some(app_data) = env::var_os("AppData") {
         let app_data = PathBuf::from(app_data);
 
-        add_roaming_shortcuts(&mut paths, &app_data, &targets);
+        add_roaming_shortcuts(&mut paths, &app_data, targets);
     }
 
     if let Some(system_profile_app_data) = get_system_profile_app_data() {
-        add_roaming_shortcuts(&mut paths, &system_profile_app_data, &targets);
+        add_roaming_shortcuts(&mut paths, &system_profile_app_data, targets);
     }
 
     paths.sort();
@@ -625,6 +703,253 @@ fn split_argument_tokens(arguments: &str) -> Vec<String> {
     tokens
 }
 
+fn run_reg(args: &[&str]) -> std::io::Result<Output> {
+    Command::new("reg")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+}
+
+fn query_registry_default_value(key: &str) -> Option<String> {
+    query_registry_value(key, None)
+}
+
+fn query_registry_named_value(key: &str, value_name: &str) -> Option<String> {
+    query_registry_value(key, Some(value_name))
+}
+
+fn query_registry_value(key: &str, value_name: Option<&str>) -> Option<String> {
+    let output = if let Some(value_name) = value_name {
+        run_reg(&["query", key, "/v", value_name]).ok()?
+    } else {
+        run_reg(&["query", key, "/ve"]).ok()?
+    };
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_registry_string_value(&text)
+}
+
+fn query_registry_bool(key: &str, value_name: &str, default_value: bool) -> bool {
+    query_registry_named_value(key, value_name)
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(default_value)
+}
+
+fn set_registry_bool(key: &str, value_name: &str, value: bool) -> bool {
+    set_registry_named_value(key, value_name, if value { "1" } else { "0" })
+}
+
+pub fn load_app_settings() -> AppSettings {
+    AppSettings {
+        hide_sign_in_indicator: query_registry_bool(APP_REGISTRY_KEY, SETTING_HIDE_SIGN_IN_INDICATOR, true),
+        restore_sidebar: query_registry_bool(APP_REGISTRY_KEY, SETTING_RESTORE_SIDEBAR, false),
+        disable_extensions: query_registry_bool(APP_REGISTRY_KEY, SETTING_DISABLE_EXTENSIONS, false),
+        apply_external_links: query_registry_bool(APP_REGISTRY_KEY, SETTING_APPLY_EXTERNAL_LINKS, false),
+        shortcut_selection: ShortcutTargetSelection {
+            stable: query_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_STABLE, true),
+            beta: query_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_BETA, false),
+            dev: query_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_DEV, false),
+            canary: query_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_CANARY, false)
+        }
+    }
+}
+
+pub fn save_app_settings(settings: &AppSettings) {
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_HIDE_SIGN_IN_INDICATOR, settings.hide_sign_in_indicator);
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_RESTORE_SIDEBAR, settings.restore_sidebar);
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_DISABLE_EXTENSIONS, settings.disable_extensions);
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_APPLY_EXTERNAL_LINKS, settings.apply_external_links);
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_STABLE, settings.shortcut_selection.stable);
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_BETA, settings.shortcut_selection.beta);
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_DEV, settings.shortcut_selection.dev);
+    let _ = set_registry_bool(APP_REGISTRY_KEY, SETTING_SHORTCUT_CANARY, settings.shortcut_selection.canary);
+}
+
+fn parse_registry_string_value(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let Some(index) = line.find("REG_SZ") else {
+            continue;
+        };
+
+        let value = line[index + "REG_SZ".len()..].trim();
+        return Some(value.to_string());
+    }
+
+    None
+}
+
+fn set_registry_default_value(key: &str, value: &str) -> bool {
+    run_reg(&["add", key, "/ve", "/t", "REG_SZ", "/d", value, "/f"])
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn set_registry_named_value(key: &str, value_name: &str, value: &str) -> bool {
+    run_reg(&["add", key, "/v", value_name, "/t", "REG_SZ", "/d", value, "/f"])
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn delete_registry_key(key: &str) -> bool {
+    run_reg(&["delete", key, "/f"])
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn delete_registry_named_value(key: &str, value_name: &str) {
+    let _ = run_reg(&["delete", key, "/v", value_name, "/f"]);
+}
+
+pub fn external_link_command_registry_key() -> &'static str {
+    EXTERNAL_LINK_COMMAND_KEY_HKCU
+}
+
+fn get_external_link_edge_executable() -> Option<String> {
+    query_registry_default_value(EXTERNAL_LINK_COMMAND_KEY_HKLM)
+        .and_then(|command| extract_executable_from_command(&command))
+        .or_else(|| {
+            get_edge_executable_candidates()
+                .into_iter()
+                .find(|candidate| candidate.selected)
+                .and_then(|candidate| candidate.path)
+                .map(|path| path.display().to_string())
+        })
+}
+
+fn extract_executable_from_command(command: &str) -> Option<String> {
+    let command = command.trim();
+
+    if let Some(rest) = command.strip_prefix('"') {
+        let end = rest.find('"')?;
+        return Some(rest[..end].to_string());
+    }
+
+    let lower = command.to_ascii_lowercase();
+    let end = lower.find(".exe")? + 4;
+    Some(command[..end].to_string())
+}
+
+fn build_external_link_command(options: &str) -> Option<String> {
+    let options = options.trim();
+
+    if options.is_empty() {
+        return None;
+    }
+
+    let executable = get_external_link_edge_executable()?;
+
+    Some(format!("\"{}\" {} {}", executable, options, EXTERNAL_LINK_ARGUMENT_SUFFIX))
+}
+
+fn is_tool_managed_external_link_command(command: &str) -> bool {
+    query_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_LAST_COMMAND_VALUE)
+        .map(|last_command| last_command == command)
+        .unwrap_or(false)
+        || command.contains("msForceNoRoundedCornerAndMargin")
+        || command.contains("msFeatureGroupNewLookAndFeelHoldout")
+        || command.contains("msShowSignInIndicator")
+        || command.contains("msHubAppsSidebarRetirement")
+}
+
+fn save_external_link_original_command() -> bool {
+    if query_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_ORIGINAL_COMMAND_SAVED_VALUE).is_some() {
+        return true;
+    }
+
+    let saved_original = if let Some(original_command) = query_registry_default_value(EXTERNAL_LINK_COMMAND_KEY_HKCU) {
+        if is_tool_managed_external_link_command(&original_command) {
+            true
+        } else {
+            set_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_ORIGINAL_COMMAND_VALUE, &original_command)
+        }
+    } else {
+        true
+    };
+
+    if !saved_original {
+        return false;
+    }
+
+    set_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_ORIGINAL_COMMAND_SAVED_VALUE, "1")
+}
+
+fn set_external_link_command(command: &str) -> bool {
+    if !save_external_link_original_command() {
+        return false;
+    }
+
+    if !set_registry_default_value(EXTERNAL_LINK_COMMAND_KEY_HKCU, command) {
+        return false;
+    }
+
+    let _ = set_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_LAST_COMMAND_VALUE, command);
+
+    true
+}
+
+fn restore_external_link_command() -> bool {
+    let saved = query_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_ORIGINAL_COMMAND_SAVED_VALUE).is_some();
+    let original_command = query_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_ORIGINAL_COMMAND_VALUE);
+
+    let restored = if let Some(original_command) = original_command.as_ref() {
+        set_registry_default_value(EXTERNAL_LINK_COMMAND_KEY_HKCU, original_command)
+    } else if query_registry_default_value(EXTERNAL_LINK_COMMAND_KEY_HKCU).is_none() {
+        true
+    } else {
+        delete_registry_key(EXTERNAL_LINK_COMMAND_KEY_HKCU)
+    };
+
+    if restored {
+        if original_command.is_some() {
+            delete_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_ORIGINAL_COMMAND_VALUE);
+        }
+
+        if saved {
+            delete_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_ORIGINAL_COMMAND_SAVED_VALUE);
+        }
+
+        delete_registry_named_value(APP_REGISTRY_KEY, EXTERNAL_LAST_COMMAND_VALUE);
+    }
+
+    restored
+}
+
+fn apply_external_link_options(options: &str) -> ExternalLinkApplyResult {
+    if options.trim().is_empty() {
+        let restored = restore_external_link_command();
+
+        return ExternalLinkApplyResult {
+            state: if restored {
+                ExternalLinkApplyState::Restored
+            } else {
+                ExternalLinkApplyState::Failed
+            }
+        };
+    }
+
+    let Some(command) = build_external_link_command(options) else {
+        return ExternalLinkApplyResult {
+            state: ExternalLinkApplyState::Failed
+        };
+    };
+
+    ExternalLinkApplyResult {
+        state: if set_external_link_command(&command) {
+            ExternalLinkApplyState::Updated
+        } else {
+            ExternalLinkApplyState::Failed
+        }
+    }
+}
+
+pub fn get_current_user_external_link_command() -> Option<String> {
+    query_registry_default_value(EXTERNAL_LINK_COMMAND_KEY_HKCU).filter(|value| !value.trim().is_empty())
+}
+
 fn read_shortcut_arguments(path: &Path) -> Option<String> {
     // Used to prefill the Custom window from the first shortcut with arguments.
     if !path.exists() {
@@ -688,41 +1013,59 @@ fn update_shortcut_arguments(path: &Path, managed_options: &str) -> WinResult<()
     Ok(())
 }
 
-pub fn apply_options(options: &str, selection: &ShortcutTargetSelection) -> ApplyResult {
-    // Store per-shortcut results so the Info window can explain what happened.
-    let mut result = ApplyResult {
-        selected_shortcut_names: selected_shortcut_display_names(selection),
-        found_shortcuts: 0,
-        updated: 0,
-        failed: 0,
-        details: Vec::new()
-    };
-
-    for shortcut_path in get_shortcut_paths(selection) {
-        if !shortcut_path.exists() {
+fn apply_shortcut_path(result: &mut ApplyResult, shortcut_path: PathBuf, options: &str, show_missing: bool) {
+    if !shortcut_path.exists() {
+        if show_missing {
             result.details.push(ShortcutApplyDetail {
                 path: shortcut_path,
                 state: ShortcutApplyState::IgnoredMissing
             });
-            continue;
         }
 
-        result.found_shortcuts += 1;
-
-        if update_shortcut_arguments(&shortcut_path, options).is_ok() {
-            result.updated += 1;
-            result.details.push(ShortcutApplyDetail {
-                path: shortcut_path,
-                state: ShortcutApplyState::Updated
-            });
-        } else {
-            result.failed += 1;
-            result.details.push(ShortcutApplyDetail {
-                path: shortcut_path,
-                state: ShortcutApplyState::Failed
-            });
-        }
+        return;
     }
+
+    result.found_shortcuts += 1;
+
+    if update_shortcut_arguments(&shortcut_path, options).is_ok() {
+        result.details.push(ShortcutApplyDetail {
+            path: shortcut_path,
+            state: ShortcutApplyState::Updated
+        });
+    } else {
+        result.failed += 1;
+        result.details.push(ShortcutApplyDetail {
+            path: shortcut_path,
+            state: ShortcutApplyState::Failed
+        });
+    }
+}
+
+pub fn apply_options(options: &str, selection: &ShortcutTargetSelection, apply_external_links: bool) -> ApplyResult {
+    // Store per-shortcut results so the Info window can explain what happened.
+    let mut result = ApplyResult {
+        selected_shortcut_names: selected_shortcut_display_names(selection),
+        found_shortcuts: 0,
+        failed: 0,
+        details: Vec::new(),
+        external_links: None
+    };
+
+    for shortcut_path in get_shortcut_paths(selection) {
+        apply_shortcut_path(&mut result, shortcut_path, options, true);
+    }
+
+    for shortcut_path in get_unselected_shortcut_paths(selection) {
+        apply_shortcut_path(&mut result, shortcut_path, "", false);
+    }
+
+    let external_options = if apply_external_links {
+        options
+    } else {
+        ""
+    };
+
+    result.external_links = Some(apply_external_link_options(external_options));
 
     result
 }
